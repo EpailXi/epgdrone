@@ -1,3 +1,4 @@
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -8,12 +9,35 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
 
 <style>
-body { font-family: Arial, sans-serif; text-align: center; }
-.image-container { margin: 20px auto; max-width: 85%; }
-canvas { border: 1px solid #ddd; display: block; max-width: 100%; height: auto; }
-.progress-bar { width: 100%; background: #ddd; margin-top: 10px; }
-.progress { height: 10px; width: 0%; background: green; }
-.input-container { margin: 10px 0; }
+body {
+    font-family: Arial, sans-serif;
+    text-align: center;
+    margin: 0;
+    padding: 20px;
+}
+.image-container {
+    margin: 20px auto;
+    max-width: 85%;
+}
+canvas {
+    border: 1px solid #ddd;
+    display: block;
+    max-width: 100%;
+    height: auto;
+}
+.input-container {
+    margin: 10px 0;
+}
+.progress-bar {
+    width: 100%;
+    background: #ddd;
+    margin-top: 10px;
+}
+.progress {
+    height: 10px;
+    width: 0%;
+    background: green;
+}
 </style>
 </head>
 
@@ -22,14 +46,14 @@ canvas { border: 1px solid #ddd; display: block; max-width: 100%; height: auto; 
 <h2>Drone Photo & Text Editor - v1.7 (PNG Lossless)</h2>
 
 <div class="input-container">
-<label>Upload Images:</label>
-<input type="file" id="imageUpload" accept="image/*" multiple>
+    <label>Upload Images:</label>
+    <input type="file" id="imageUpload" accept="image/*" multiple>
 </div>
 
 <div class="input-container">
-<input type="text" id="description" placeholder="Enter description...">
-<input type="date" id="datePicker">
-<button onclick="updateImages()">Apply</button>
+    <input type="text" id="description" placeholder="Enter description...">
+    <input type="date" id="datePicker">
+    <button onclick="updateImages()">Apply</button>
 </div>
 
 <div id="imagesContainer"></div>
@@ -38,33 +62,36 @@ canvas { border: 1px solid #ddd; display: block; max-width: 100%; height: auto; 
 <div class="progress-bar"><div class="progress" id="progress"></div></div>
 
 <script>
-/* ===================== LOGO OVERLAY ===================== */
-let overlayImage = "data:image/png;base64,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";
+/* ===================== GLOBAL STORAGE ===================== */
+const originalImages = new Map();
+
+/* ===================== LOGO OVERLAY (CACHED) ===================== */
+const overlayImg = new Image();
+overlayImg.src = "data:image/png;base64,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";
 
 /* ===================== IMAGE UPLOAD ===================== */
-document.getElementById('imageUpload').addEventListener('change', e => {
-    const container = document.getElementById('imagesContainer');
-    container.innerHTML = '';
+imageUpload.addEventListener("change", e => {
+    imagesContainer.innerHTML = "";
+    originalImages.clear();
 
-    Array.from(e.target.files).forEach(file => {
+    [...e.target.files].forEach(file => {
         const reader = new FileReader();
         reader.onload = ev => {
-            const div = document.createElement('div');
-            div.className = 'image-container';
-            div.innerHTML = '<canvas></canvas>';
-            container.appendChild(div);
-            processImage(div, ev.target.result);
+            const div = document.createElement("div");
+            div.className = "image-container";
+            div.innerHTML = "<canvas></canvas>";
+            imagesContainer.appendChild(div);
+
+            originalImages.set(div, ev.target.result);
+            processImage(div);
         };
         reader.readAsDataURL(file);
     });
 });
 
-/* ===================== UPDATE TEXT ===================== */
+/* ===================== UPDATE ===================== */
 function updateImages() {
-    document.querySelectorAll('.image-container').forEach(container => {
-        const canvas = container.querySelector('canvas');
-        processImage(container, canvas.toDataURL("image/png"));
-    });
+    document.querySelectorAll(".image-container").forEach(processImage);
 }
 
 /* ===================== AUTO-FIT TEXT ===================== */
@@ -77,10 +104,13 @@ function fitText(ctx, text, maxWidth, maxFont) {
     return size;
 }
 
-/* ===================== IMAGE PROCESS ===================== */
-function processImage(container, src) {
-    const canvas = container.querySelector('canvas');
-    const ctx = canvas.getContext('2d');
+/* ===================== PROCESS ===================== */
+function processImage(container) {
+    const src = originalImages.get(container);
+    if (!src) return;
+
+    const canvas = container.querySelector("canvas");
+    const ctx = canvas.getContext("2d");
 
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
@@ -97,60 +127,52 @@ function processImage(container, src) {
         canvas.style.height = img.height + "px";
 
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        ctx.drawImage(img, 0, 0, img.width, img.height);
+        ctx.drawImage(img, 0, 0);
 
-        /* ===== LOGO ===== */
-        const overlay = new Image();
-        overlay.src = overlayImage;
-        overlay.onload = () => {
+        if (overlayImg.complete) {
             const size = Math.min(img.width * 0.18, img.height * 0.18, 400);
-            ctx.drawImage(overlay, 30, 30, size, size * (overlay.height / overlay.width));
-        };
+            ctx.drawImage(overlayImg, 30, 30, size, size * (overlayImg.height / overlayImg.width));
+        }
 
-        /* ===== BOTTOM BANNER ===== */
         const bannerHeight = Math.max(img.height * 0.08, 90);
         ctx.fillStyle = "rgba(255,255,255,0.85)";
         ctx.fillRect(0, img.height - bannerHeight, img.width, bannerHeight);
 
-        /* ===== TEXT ===== */
-        const text = `${document.getElementById('description').value} - ${document.getElementById('datePicker').value}`;
+        const text = `${description.value} - ${datePicker.value}`;
         const fontSize = fitText(ctx, text, img.width - 40, 80);
 
         ctx.fillStyle = "#000";
         ctx.font = `bold ${fontSize}px Arial`;
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.textRendering = "geometricPrecision";
-
         ctx.fillText(text, img.width / 2, img.height - bannerHeight / 2);
     };
 }
 
 /* ===================== DOWNLOAD ===================== */
 function downloadImages() {
-    const containers = document.querySelectorAll('.image-container');
+    const containers = document.querySelectorAll(".image-container");
     if (!containers.length) return alert("No images");
 
-    const date = document.getElementById('datePicker').value || "no-date";
+    const date = datePicker.value || "no-date";
 
     if (containers.length === 1) {
-        const canvas = containers[0].querySelector('canvas');
-        const link = document.createElement('a');
+        const canvas = containers[0].querySelector("canvas");
+        const link = document.createElement("a");
         link.href = canvas.toDataURL("image/png");
         link.download = `drone_${date}.png`;
         link.click();
     } else {
         const zip = new JSZip();
-        let count = 0;
+        let done = 0;
 
         containers.forEach((c, i) => {
-            c.querySelector('canvas').toBlob(blob => {
-                zip.file(`drone_${date}_${String(i+1).padStart(2,'0')}.png`, blob);
-                count++;
-                document.getElementById('progress').style.width =
-                    `${(count / containers.length) * 100}%`;
+            c.querySelector("canvas").toBlob(blob => {
+                zip.file(`drone_${date}_${String(i + 1).padStart(2, "0")}.png`, blob);
+                done++;
+                progress.style.width = `${(done / containers.length) * 100}%`;
 
-                if (count === containers.length) {
+                if (done === containers.length) {
                     zip.generateAsync({ type: "blob" })
                        .then(content => saveAs(content, `drone_images_${date}.zip`));
                 }
