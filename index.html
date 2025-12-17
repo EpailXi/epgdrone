@@ -1,184 +1,385 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Drone Photo & Text Editor - v1.7 (PNG Lossless)</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DroneOps Editor | Lossless Batch Processor</title>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #1a1a1a;
+            --card-bg: #2d2d2d;
+            --primary: #007bff;
+            --primary-hover: #0056b3;
+            --text-color: #e0e0e0;
+            --border-color: #444;
+        }
 
-<style>
-body {
-    font-family: Arial, sans-serif;
-    text-align: center;
-    margin: 0;
-    padding: 20px;
-}
-.image-container {
-    margin: 20px auto;
-    max-width: 85%;
-}
-canvas {
-    border: 1px solid #ddd;
-    display: block;
-    max-width: 100%;
-    height: auto;
-}
-.input-container {
-    margin: 10px 0;
-}
-.progress-bar {
-    width: 100%;
-    background: #ddd;
-    margin-top: 10px;
-}
-.progress {
-    height: 10px;
-    width: 0%;
-    background: green;
-}
-</style>
+        body {
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding-bottom: 50px;
+        }
+
+        /* Sticky Header */
+        header {
+            background-color: var(--card-bg);
+            padding: 15px 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            align-items: center;
+            justify-content: center;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        h1 { margin: 0; font-size: 1.2rem; color: #fff; margin-right: auto; }
+
+        .control-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        input[type="text"], input[type="date"] {
+            padding: 8px;
+            border-radius: 4px;
+            border: 1px solid var(--border-color);
+            background: #404040;
+            color: white;
+        }
+
+        button {
+            background-color: var(--primary);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.2s;
+            font-weight: bold;
+        }
+
+        button:hover { background-color: var(--primary-hover); }
+        button.secondary { background-color: #444; }
+        button.secondary:hover { background-color: #555; }
+
+        /* Drag & Drop Zone */
+        .upload-zone {
+            margin: 20px auto;
+            max-width: 800px;
+            border: 2px dashed var(--border-color);
+            border-radius: 10px;
+            padding: 40px;
+            text-align: center;
+            background-color: var(--card-bg);
+            transition: border-color 0.3s;
+            cursor: pointer;
+        }
+        .upload-zone:hover, .upload-zone.dragover { border-color: var(--primary); }
+
+        /* Image Grid */
+        #imagesContainer {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            padding: 20px;
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        .image-card {
+            background: var(--card-bg);
+            padding: 10px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        canvas {
+            max-width: 100%;
+            height: auto;
+            border-radius: 4px;
+            /* Enhance visibility of the canvas against dark bg */
+            box-shadow: 0 0 5px rgba(0,0,0,0.5); 
+        }
+
+        .meta-info {
+            margin-top: 10px;
+            font-size: 0.85rem;
+            color: #aaa;
+        }
+
+        /* Progress Bar */
+        .progress-container {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: 5px;
+            background: transparent;
+            z-index: 200;
+        }
+        .progress-bar {
+            height: 100%;
+            width: 0%;
+            background: #28a745;
+            transition: width 0.3s;
+        }
+        
+        .hidden { display: none; }
+    </style>
 </head>
-
 <body>
 
-<h2>Drone Photo & Text Editor - v1.7 (PNG Lossless)</h2>
+<header>
+    <h1>DroneOps Editor v2.0</h1>
+    
+    <div class="control-group">
+        <input type="text" id="description" placeholder="Project Name / Location" oninput="debouncedUpdate()">
+        <input type="date" id="datePicker" onchange="updateImages()">
+    </div>
+    
+    <div class="control-group">
+        <button class="secondary" onclick="document.getElementById('logoUpload').click()">Change Logo</button>
+        <input type="file" id="logoUpload" accept="image/*" class="hidden">
+        
+        <button onclick="downloadImages()">Download All (ZIP)</button>
+    </div>
+</header>
 
-<div class="input-container">
-    <label>Upload Images:</label>
-    <input type="file" id="imageUpload" accept="image/*" multiple>
-</div>
-
-<div class="input-container">
-    <input type="text" id="description" placeholder="Enter description...">
-    <input type="date" id="datePicker">
-    <button onclick="updateImages()">Apply</button>
+<div class="upload-zone" id="dropZone" onclick="document.getElementById('imageUpload').click()">
+    <h3>Click or Drag Drone Photos Here</h3>
+    <p style="color: #888">Supports multiple JPG/PNG files</p>
+    <input type="file" id="imageUpload" accept="image/*" multiple class="hidden">
 </div>
 
 <div id="imagesContainer"></div>
 
-<button onclick="downloadImages()">Download PNG Images</button>
-<div class="progress-bar"><div class="progress" id="progress"></div></div>
+<div class="progress-container">
+    <div class="progress-bar" id="progressBar"></div>
+</div>
 
 <script>
-/* ===================== GLOBAL STORAGE ===================== */
-const originalImages = new Map();
+/* ===================== CONFIG & STATE ===================== */
+const state = {
+    originalImages: new Map(), // Stores raw dataURLs
+    logoSrc: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAN4AAAA6CAYAAADfsucjAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAoJSURBVHhe7Z17jB1VHcd/zCm+UIuPVghEJfyhFmKMNZKYaAMWUxTY7t5ze+fMFlHA/mF81WCgit6d39lFG1IFRVERDaDiKxqREEgkWOqDpIiBIJL4qLVp985sH7ZIq7UP85u7W7q/M3fvmbmzd2eu55N8/9n8zm/md+797p2Z8xgAh8PhcDgcDofD4XA4HA6Hw+FwOBwOh8PhcDgcDofD4XBkZPJiOO2AhCVFaNsKeBHPT9Dfeexc6pSnWOrNF4AfXgyBRlD6x6BwMyj8TR/1a1B4H6jwi9AIh+DKZv6ilf759PmXSz7+Cny8F3z8PDTCdwLAKfzUe4I+w0CvBB+bEOB3QeH9EOADCyYfv85PsRNxTdwY1xcd71WRFMf21OA8np+Ia+LLPH4uRXXvAzxHccjxs0Dhl0DpPRDo46URnY8fjsNo8+X8lLuiMDbylVFKPwkN/R5++pmRG5aAwo2gcLdxjIUU1WdJgcb7Pc9NHF8Op8ZSRDx+Ls2P8ZpNDxReBwr/ZXRYmaRwB6hwBT/9OamK8UgKj0GAE7wEaxpjV4DCvUbeMmgBjNeqeet5bmJyRFzGY7upeONdvvFl7cuBlM4qp/4DKqzxMjpSJeM9r2t5GV1ReFPbuEaucqjfxpPicFSHM3huIpbiR0Z8FxVrPLp3CnCL0Ulll8JDEDTfwstJpYrGU/o5UM1X81I6osLPGTnKpj4bL5Le/TwvsW0ITo+lOMjju6lY4ym8zeigqkjpR3g5qVTReCQ/HOalpNLQ74AAjxjty6Y+G69V8xTPS8TSu4bH2qg44wW4HJQ+anRQVUSXVQ19Li/LoKrGa2DAS0mFngDztmVUH40XSbF/56XwEp6XiKTYzONtVJzxFN5ldE71tJKXZTDIxvPxvFLf152sPhovrolv85zEpIRzIimOGvEWKs54gZ4yOqeTkl9GvBcCfUXyYQ83l4JsvrJYTSyBQL8rGb/jx+8sC+OFd7fH8hZa+FBy72bWkC4r44UfM9p1k8LtoMI7QIU3Jk9Q+yU6V0t6Nd7UiLiQ5yRi6d3AY21VjPHoi277n1JhK7mP6B+nZHjK2t14ZWJ0/ExQ+ERKHaZsjBfom412naT0sxCMXQ31uuBpykYvxouk2H4cwOM5iUiKZ3i8rYoxHn0B+AfTUeElvPm8E+B68zxSVS3jEY2xRkodpqyMh18z2qVJ4eHkaqIi9GI8asvzEZM1uMCIzaD+Go8uMeWmF/Pm844ffsI4l3RV0HjhJSl1mCrSeAGm3vOUlbzGoyliuyQs4/mIWIpbeXwW9d94K3qYJ5mXQTZeEA6l1GGqSOPZ5CoReY0XS7GV5yKmp4hNGfEZ5Iw3W9UzHs2FNeswZWMWa+OFQ7xpmclrvJb0Ps5zEa2aGOKxWdVn4+ExUPp7ydBDf7XVOJd0dTeer1eBj5cvqOiL7+NaUPhN68HuhTSewj+Cwr9kk34aFD4Ivh4HNf52njILeYwXSXF4chiW8lxELL2f8Pis6q/xyq/uxhvkcbx5M54+ZOTIovYT88dgNN9qi3zG8+7jeYh/vg9eEUtxiMdnlTPebA2u8fzx7lPGymq8GbUNeDus+ugL+SHmIo/xYuk1eB5iqu6tM2JzyBlvtgbXeGsmzuelGJTdeDNS+MsszwoyG0+Kff+QkPr0PZZiixGfQ854J8sPL+ClGVTReAp3ATRTB4FnURXjkXz7IY2sxouk94vdEpZxTY6IC+OcU8S4nPFmpHA/yPWp/+VmUUXj+RjyMlKpkvHal53dr1ByGK+TaKZK6zJ4DVc8DGfGUrR4/FxyxiMlT1vDT/KyUqma8RT+LVmcbEOVjEeiS04LijJeLL3P8NzEpBQXGbFd9P9nvPaQBk3SPpJ8IWiogR7N21Il4ym9A2QzdeZFKlUzHn2GNBm+C0UYj1YhTA7B63luIpbiOzy+mxbCePe0Z5djCAo/CwFuAIWfSn5xaMa5Cj8MAa4DH68Che9PHoP7uAYCHEnGsBS+N9nEx9cXJfMFacI1jfOsGX8r+BNvhtGJZSDxDcnaukC/DuSnz4K1zaWw+vpXQf26xbD2ptOSlfLr1p2aaycuG+O19zo5sjCirSzwz8kGRVRzFmyNR7NlsqA0rVzYBApvAYW3Jgum/fD2ZOpZoO+c3rXsB8kOdIH+WbaVLriaH45TkPE287wErdOj9Xo8vpv6azyFR7I8jSoldsY7DCuaixZEvawWsDWe0qO8aaFIfY71kicVXs+bc4owXkt61/C8REt6AY+1UZ+Np4/Cqhxb6pUJW+NVEWvj4UbetHBozSE/bpp83MSbcno2nhQH99ZhMc9L0F4sRryF+ms8Es2mrzLOeFTfX3v6ZbVBhd8wjpsmX9/Mm3J6NV4kxQ95ToJ2HYuk+C+Pt1ExxqOnZvYLYR/kzSvFIBuPfj14LZ1EE8/nk2Sn6pTjcqlwjDfl9Gq8uCYu5TmJuOatN2ItVYzxCKW3G53SSbRnY1Xv9QbZeIG+2qilk6hGX1/JUxTCaPNsCPCgccw00QO4LvRkPCmix5YDPYgziKR43Ii3VHHGs71MOdFhdPOMO0sjhY/yklIZZOO1v/B2qx3addLQzKPghze0n0TrD/UsFX4kWZnAj9VJFsMlvRgvkuIWno/YMwzn00JZHm+r4oxHcwGzfGhlEw002zDIxiP85HG+WVMphdtshoTyGo+MNVWDt/F8RFwTG3l8FhVnPIJ2mzI6pyJyxmtDvyAK/23UVEb5IfLTT6MH4z3NcxG0+VEkxQ4en0XFGq/+hcXJ4C3voCrIGe95gvBao6aySeGBZFtIC/Ibz9vAcxGtEbGSx2ZVscYjVPONoHRkdFTZ5Yw3G4XfMuoqk3xMfXNPGnmMR1PE9tbhtTwX0aqJO3l8VhVvPKKBb0q+yLyzyixnPEbTgwC/Yj1M1E8p/KnNvd0M+Yy36GGeh6C3y0ZSHODxWTU/xiNonqAK6e2v5fvg0uSMlw4NGSi9z6hxoUSmyzgUlcd4cc27iuchpqQ3asTm0PwZbwaa0Nx+FXK5DeiM15l68wzw8avW8yfnQ/RGWhpqyPBLN0Nm40nx3O5VkDq1MZbeA0Z8Ds2/8Wagp2X0gkSF32/v+4+/A4V/AB//lHzp6e2sAbbaHaz3JTfPiejdbicLn53++/7kbaVJPMbJKuvkDa/49+ldqp5p726ln0yOQ8t/aMwp0L8FH7eAwkdA4cMQ4EOJaPczG9oz/+m4cynmzQaCoebp4I/RL+Ad0/23dbpfH5/uY9IToMKnEgX6qfbnMKOk72Z2EqPPfPsJBXrnCSmMQOEkKGqfrFr4INSbL+WnY0tW40U1cQ/PQUwveM01RYyrf8bLD/2HO1kORyai1XBuqybebavdw3A2z0HskrCEx+YVmZjndzgcDofD4XA4HA6Hw+FwOBwOh8PhcDgcDofDkcL/AJlWcCBsy3AMAAAAAElFTkSuQmCC"
+};
 
-/* ===================== LOGO OVERLAY (CACHED) ===================== */
-const overlayImg = new Image();
-overlayImg.src = "data:image/png;base64,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";
+const dom = {
+    dropZone: document.getElementById('dropZone'),
+    imageUpload: document.getElementById('imageUpload'),
+    logoUpload: document.getElementById('logoUpload'),
+    container: document.getElementById('imagesContainer'),
+    description: document.getElementById('description'),
+    datePicker: document.getElementById('datePicker'),
+    progressBar: document.getElementById('progressBar')
+};
 
-/* ===================== IMAGE UPLOAD ===================== */
-imageUpload.addEventListener("change", e => {
-    imagesContainer.innerHTML = "";
-    originalImages.clear();
+/* ===================== INITIALIZATION ===================== */
+// Set default date to today
+dom.datePicker.valueAsDate = new Date();
 
-    [...e.target.files].forEach(file => {
+/* ===================== EVENT LISTENERS ===================== */
+// Handle file selection
+dom.imageUpload.addEventListener("change", e => handleFiles(e.target.files));
+dom.logoUpload.addEventListener("change", handleLogoUpload);
+
+// Drag & Drop
+dom.dropZone.addEventListener("dragover", e => {
+    e.preventDefault();
+    dom.dropZone.classList.add("dragover");
+});
+dom.dropZone.addEventListener("dragleave", () => dom.dropZone.classList.remove("dragover"));
+dom.dropZone.addEventListener("drop", e => {
+    e.preventDefault();
+    dom.dropZone.classList.remove("dragover");
+    handleFiles(e.dataTransfer.files);
+});
+
+// Debounce text input
+let timeout;
+function debouncedUpdate() {
+    clearTimeout(timeout);
+    timeout = setTimeout(updateImages, 300);
+}
+
+/* ===================== LOGIC HANDLERS ===================== */
+function handleFiles(files) {
+    // Clear previous if desired, or append. Here we append.
+    dom.container.innerHTML = "";
+    state.originalImages.clear();
+
+    [...files].forEach(file => {
+        if (!file.type.startsWith('image/')) return;
+        
         const reader = new FileReader();
         reader.onload = ev => {
             const div = document.createElement("div");
-            div.className = "image-container";
-            div.innerHTML = "<canvas></canvas>";
-            imagesContainer.appendChild(div);
-
-            originalImages.set(div, ev.target.result);
+            div.className = "image-card";
+            div.innerHTML = `<canvas></canvas><div class="meta-info">${file.name}</div>`;
+            dom.container.appendChild(div);
+            
+            state.originalImages.set(div, ev.target.result);
             processImage(div);
         };
         reader.readAsDataURL(file);
     });
-});
+}
 
-/* ===================== UPDATE ===================== */
+function handleLogoUpload(e) {
+    const file = e.target.files[0];
+    if (file) {
+        const reader = new FileReader();
+        reader.onload = ev => {
+            state.logoSrc = ev.target.result;
+            updateImages();
+        };
+        reader.readAsDataURL(file);
+    }
+}
+
 function updateImages() {
-    document.querySelectorAll(".image-container").forEach(processImage);
+    document.querySelectorAll(".image-card").forEach(processImage);
 }
 
-/* ===================== AUTO-FIT TEXT ===================== */
-function fitText(ctx, text, maxWidth, maxFont) {
-    let size = maxFont;
-    do {
-        ctx.font = `bold ${size}px Arial`;
-        size--;
-    } while (ctx.measureText(text).width > maxWidth && size > 20);
-    return size;
+function formatDate(dateString) {
+    if (!dateString) return "";
+    const date = new Date(dateString);
+    // Format: "25 Dec 2023"
+    return date.toLocaleDateString('en-GB', { 
+        day: 'numeric', 
+        month: 'short', 
+        year: 'numeric' 
+    });
 }
 
-/* ===================== PROCESS ===================== */
+/* ===================== IMAGE PROCESSING ===================== */
 function processImage(container) {
-    const src = originalImages.get(container);
+    const src = state.originalImages.get(container);
     if (!src) return;
 
     const canvas = container.querySelector("canvas");
     const ctx = canvas.getContext("2d");
-
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = "high";
-
+    
+    // Load main image
     const img = new Image();
     img.src = src;
 
     img.onload = () => {
-        const dpr = window.devicePixelRatio || 1;
+        // IMPORTANT: Use natural dimensions for lossless quality
+        // Do NOT use clientWidth/Height or Screen DPI here.
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
 
-        canvas.width = img.width * dpr;
-        canvas.height = img.height * dpr;
-        canvas.style.width = img.width + "px";
-        canvas.style.height = img.height + "px";
-
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        // Draw original
         ctx.drawImage(img, 0, 0);
 
-        if (overlayImg.complete) {
-            const size = Math.min(img.width * 0.18, img.height * 0.18, 400);
-            ctx.drawImage(overlayImg, 30, 30, size, size * (overlayImg.height / overlayImg.width));
+        // --- DRAW OVERLAY ---
+        const overlay = new Image();
+        overlay.src = state.logoSrc;
+        
+        if (overlay.complete && overlay.naturalWidth > 0) {
+            drawOverlayComponents(ctx, img, overlay);
+        } else {
+            overlay.onload = () => drawOverlayComponents(ctx, img, overlay);
         }
-
-        const bannerHeight = Math.max(img.height * 0.08, 90);
-        ctx.fillStyle = "rgba(255,255,255,0.85)";
-        ctx.fillRect(0, img.height - bannerHeight, img.width, bannerHeight);
-
-        const text = `${description.value} - ${datePicker.value}`;
-        const fontSize = fitText(ctx, text, img.width - 40, 80);
-
-        ctx.fillStyle = "#000";
-        ctx.font = `bold ${fontSize}px Arial`;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(text, img.width / 2, img.height - bannerHeight / 2);
     };
 }
 
-/* ===================== DOWNLOAD ===================== */
+function drawOverlayComponents(ctx, img, overlayImg) {
+    // 1. Draw Logo (Top Left)
+    // Scale logo relative to image size (e.g., 20% of width)
+    const logoScale = Math.min(img.width * 0.2, img.height * 0.2) / overlayImg.width;
+    // Cap max logo size for very large images so it doesn't look ridiculous
+    const finalScale = Math.min(logoScale, 2.0); 
+    
+    const logoW = overlayImg.width * finalScale;
+    const logoH = overlayImg.height * finalScale;
+    const padding = img.width * 0.03; // 3% padding
+
+    ctx.drawImage(overlayImg, padding, padding, logoW, logoH);
+
+    // 2. Draw Bottom Banner
+    const bannerHeight = Math.max(img.height * 0.06, 80); // Min 80px high
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.fillRect(0, img.height - bannerHeight, img.width, bannerHeight);
+
+    // 3. Draw Text
+    const dateStr = formatDate(dom.datePicker.value);
+    const descStr = dom.description.value.trim();
+    const fullText = descStr ? `${descStr} | ${dateStr}` : dateStr;
+
+    // Font Sizing Logic
+    let fontSize = bannerHeight * 0.5;
+    ctx.font = `bold ${fontSize}px Arial`;
+    
+    // Shrink text if it's too long
+    while (ctx.measureText(fullText).width > (img.width - 100) && fontSize > 20) {
+        fontSize -= 5;
+        ctx.font = `bold ${fontSize}px Arial`;
+    }
+
+    ctx.fillStyle = "#000";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(fullText, img.width / 2, img.height - (bannerHeight / 2));
+}
+
+/* ===================== DOWNLOAD LOGIC ===================== */
 function downloadImages() {
-    const containers = document.querySelectorAll(".image-container");
-    if (!containers.length) return alert("No images");
+    const containers = document.querySelectorAll(".image-card");
+    if (containers.length === 0) return alert("Please upload images first.");
 
-    const date = datePicker.value || "no-date";
+    const date = dom.datePicker.value || "no-date";
+    const desc = dom.description.value.replace(/[^a-z0-9]/gi, '_').substring(0, 15) || "drone";
+    const filenameBase = `${desc}_${date}`;
 
+    // Single Image Download
     if (containers.length === 1) {
         const canvas = containers[0].querySelector("canvas");
-        const link = document.createElement("a");
-        link.href = canvas.toDataURL("image/png");
-        link.download = `drone_${date}.png`;
-        link.click();
-    } else {
-        const zip = new JSZip();
-        let done = 0;
-
-        containers.forEach((c, i) => {
-            c.querySelector("canvas").toBlob(blob => {
-                zip.file(`drone_${date}_${String(i + 1).padStart(2, "0")}.png`, blob);
-                done++;
-                progress.style.width = `${(done / containers.length) * 100}%`;
-
-                if (done === containers.length) {
-                    zip.generateAsync({ type: "blob" })
-                       .then(content => saveAs(content, `drone_images_${date}.zip`));
-                }
-            }, "image/png");
+        canvas.toBlob(blob => {
+            saveAs(blob, `${filenameBase}.png`);
         });
+        return;
     }
+
+    // Bulk Zip Download
+    const zip = new JSZip();
+    const folder = zip.folder("processed_photos");
+    let processed = 0;
+
+    containers.forEach((c, i) => {
+        const canvas = c.querySelector("canvas");
+        // Get high quality blob
+        canvas.toBlob(blob => {
+            folder.file(`${filenameBase}_${String(i + 1).padStart(3, "0")}.png`, blob);
+            processed++;
+            
+            // Update Progress
+            const pct = (processed / containers.length) * 100;
+            dom.progressBar.style.width = `${pct}%`;
+
+            if (processed === containers.length) {
+                zip.generateAsync({ type: "blob" }).then(content => {
+                    saveAs(content, `${filenameBase}_BATCH.zip`);
+                    setTimeout(() => { dom.progressBar.style.width = "0%"; }, 2000);
+                });
+            }
+        }, "image/png");
+    });
 }
 </script>
 
