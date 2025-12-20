@@ -4,8 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>DroneOps Editor | Lossless Batch Processor</title>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+
 <style>
 :root {
     --bg-color: #1a1a1a;
@@ -15,6 +17,7 @@
     --text-color: #e0e0e0;
     --border-color: #444;
 }
+
 body {
     font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
     background-color: var(--bg-color);
@@ -22,6 +25,7 @@ body {
     margin: 0;
     padding-bottom: 50px;
 }
+
 header {
     background-color: var(--card-bg);
     padding: 15px 20px;
@@ -36,8 +40,11 @@ header {
     justify-content: center;
     border-bottom: 1px solid var(--border-color);
 }
+
 h1 { margin: 0; font-size: 1.2rem; color: #fff; margin-right: auto; }
+
 .control-group { display: flex; gap: 10px; align-items: center; }
+
 input[type="text"], input[type="date"] {
     padding: 8px;
     border-radius: 4px;
@@ -45,6 +52,7 @@ input[type="text"], input[type="date"] {
     background: #404040;
     color: white;
 }
+
 button {
     background-color: var(--primary);
     color: white;
@@ -55,9 +63,11 @@ button {
     transition: background 0.2s;
     font-weight: bold;
 }
+
 button:hover { background-color: var(--primary-hover); }
 button.secondary { background-color: #444; }
 button.secondary:hover { background-color: #555; }
+
 .upload-zone {
     margin: 20px auto;
     max-width: 800px;
@@ -70,6 +80,7 @@ button.secondary:hover { background-color: #555; }
     cursor: pointer;
 }
 .upload-zone:hover, .upload-zone.dragover { border-color: var(--primary); }
+
 #imagesContainer {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
@@ -78,6 +89,7 @@ button.secondary:hover { background-color: #555; }
     max-width: 1600px;
     margin: 0 auto;
 }
+
 .image-card {
     background: var(--card-bg);
     padding: 10px;
@@ -87,17 +99,15 @@ button.secondary:hover { background-color: #555; }
     flex-direction: column;
     align-items: center;
 }
-canvas {
-    max-width: 100%;
-    height: auto;
-    border-radius: 4px;
-    box-shadow: 0 0 5px rgba(0,0,0,0.5); 
-}
+
+canvas { max-width: 100%; height: auto; border-radius: 4px; box-shadow: 0 0 5px rgba(0,0,0,0.5); }
+
 .meta-info {
     margin-top: 10px;
     font-size: 0.85rem;
     color: #aaa;
 }
+
 .progress-container {
     position: fixed;
     bottom: 0;
@@ -119,35 +129,39 @@ canvas {
 <body>
 
 <header>
-    <h1>DroneOps Editor v2.0</h1>
-    <div class="control-group">
-        <input type="text" id="description" placeholder="Project Name / Location" oninput="debouncedUpdate()">
-        <input type="date" id="datePicker" onchange="updateImages()">
-    </div>
-    <div class="control-group">
-        <button class="secondary" onclick="document.getElementById('logoUpload').click()">Change Logo</button>
-        <input type="file" id="logoUpload" accept="image/*" class="hidden">
-        <button onclick="downloadImages()">Download All (ZIP)</button>
-    </div>
+<h1>DroneOps Editor v2.0</h1>
+
+<div class="control-group">
+    <input type="text" id="description" placeholder="Project Name / Location" oninput="debouncedUpdate()">
+    <input type="date" id="datePicker" onchange="updateImages()">
+</div>
+
+<div class="control-group">
+    <button class="secondary" onclick="document.getElementById('logoUpload').click()">Change Logo</button>
+    <input type="file" id="logoUpload" accept="image/*" class="hidden">
+    <button onclick="downloadImages()">Download All (ZIP)</button>
+</div>
 </header>
 
 <div class="upload-zone" id="dropZone" onclick="document.getElementById('imageUpload').click()">
-    <h3>Click or Drag Drone Photos Here</h3>
-    <p style="color: #888">Supports multiple JPG/PNG files</p>
-    <input type="file" id="imageUpload" accept="image/*" multiple class="hidden">
+<h3>Click or Drag Drone Photos Here</h3>
+<p style="color: #888">Supports multiple JPG/PNG files</p>
+<input type="file" id="imageUpload" accept="image/*" multiple class="hidden">
 </div>
 
 <div id="imagesContainer"></div>
 
 <div class="progress-container">
-    <div class="progress-bar" id="progressBar"></div>
+<div class="progress-bar" id="progressBar"></div>
 </div>
 
 <script>
 const state = {
-    originalImages: new Map(),
-    logoSrc: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAN4AAAA6CAYAAADfsucjAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAoJSURBVHhe7Z17jB1VHcd/zCm+UIuPVghEJfyhFmKMNZKYaAMWUxTY7t5ze+fMFlHA/mF81WCgit6d39lFG1IFRVERDaDiKxqREEgkWOqDpIiBIJL4qLVp985sH7ZIq7UP85u7W7q/M3fvmbmzd2eu55N8/9n8zm/md+797p2Z8xgAh8PhcDgcDofD4XA4HA6Hw+FwOBwOh8PhcDgcDofD4XBkZPJiOO2AhCVFaNsKeBHPT9Dfeexc6pSnWOrNF4AfXgyBRlD6x6BwMyj8TR/1a1B4H6jwi9AIh+DKZv6ilf759PmXSz7+Cny8F3z8PDTCdwLAKfzUe4I+w0CvBB+bEOB3QeH9EOADCyYfv85PsRNxTdwY1xcd71WRFMf21OA8np+Ia+LLPH4uRXXvAzxHccjxs0Dhl0DpPRDo46URnY8fjsNo8+X8lLuiMDbylVFKPwkN/R5++pmRG5aAwo2gcLdxjIUU1WdJgcb7Pc9NHF8Op8ZSRDx+Ls2P8ZpNDxReBwr/ZXRYmaRwB6hwBT/9OamK8UgKj0GAE7wEaxpjV4DCvUbeMmgBjNeqeet5bmJyRFzGY7upeONdvvFl7cuBlM4qp/4DKqzxMjpSJeM9r2t5GV1ReFPbuEaucqjfxpPicFSHM3huIpbiR0Z8FxVrPLp3CnCL0Ulll8JDEDTfwstJpYrGU/o5UM1X81I6osLPGTnKpj4bL5Le/TwvsW0ITo+lOMjju6lY4ym8zeigqkjpR3g5qVTReCQ/HOalpNLQ74AAjxjty6Y+G69V8xTPS8TSu4bH2qg44wW4HJQ+anRQVUSXVQ19Li/LoKrGa2DAS0mFngDztmVUH40XSbF/56XwEp6XiKTYzONtVJzxFN5ldE71tJKXZTDIxvPxvFLf152sPhovrolv85zEpIRzIimOGvEWKs54gZ4yOqeTkl9GvBcCfUXyYQ83l4JsvrJYTSyBQL8rGb/jx+8sC+OFd7fH8hZa+FBy72bWkC4r44UfM9p1k8LtoMI7QIU3Jk9Q+yU6V0t6Nd7UiLiQ5yRi6d3AY21VjPHoi277n1JhK7mP6B+nZHjK2t14ZWJ0/ExQ+ERKHaZsjBfom412naT0sxCMXQ31uuBpykYvxouk2H4cwOM5iUiKZ3i8rYoxHn0B+AfTUeElvPm8E+B68zxSVS3jEY2xRkodpqyMh18z2qVJ4eHkaqIi9GI8asvzEZM1uMCIzaD+Go8uMeWmF/Pm844ffsI4l3RV0HjhJSl1mCrSeAGm3vOUlbzGoyliuyQs4/mIWIpbeXwW9d94K3qYJ5mXQTZeEA6l1GGqSOPZ5CoReY0XS7GV5yKmp4hNGfEZ5Iw3W9UzHs2FNeswZWMWa+OFQ7xpmclrvJb0Ps5zEa2aGOKxWdVn4+ExUPp7ydBDf7XVOJd0dTeer1eBj5cvqOiL7+NaUPhN68HuhTSewj+Cwr9kk34aFD4Ivh4HNf52njILeYwXSXF4chiW8lxELL2f8Pis6q/xyq/uxhvkcbx5M54+ZOTIovYT88dgNN9qi3zG8+7jeYh/vg9eEUtxiMdnlTPebA2u8fzx7lPGymq8GbUNeDus+ugL+SHmIo/xYuk1eB5iqu6tM2JzyBlvtgbXeGsmzuelGJTdeDNS+MsszwoyG0+Kff+QkPr0PZZiixGfQ854J8sPL+ClGVTReAp3ATRTB4FnURXjkXz7IY2sxouk94vdEpZxTY6IC+OcU8S4nPFmpHA/yPWp/+VmUUXj+RjyMlKpkvHal53dr1ByGK+TaKZK6zJ4DVc8DGfGUrR4/FxyxiMlT1vDT/KyUqma8RT+LVmcbEOVjEeiS04LijJeLL3P8NzEpBQXGbFd9P9nvPaQBk3SPpJ8IWiogR7N21Il4ym9A2QzdeZFKlUzHn2GNBm+C0UYj1YhTA7B63luIpbiOzy+mxbCePe0Z5djCAo/CwFuAIWfSn5xaMa5Cj8MAa4DH68Che9PHoP7uAYCHEnGsBS+N9nEx9cXJfMFacI1jfOsGX8r+BNvhtGJZSDxDcnaukC/DuSnz4K1zaWw+vpXQf26xbD2ptOSlfLr1p2aaycuG+O19zo5sjCirSzwz8kGRVRzFmyNR7NlsqA0rVzYBApvAYW3Jgum/fD2ZOpZoO+c3rXsB8kOdIH+WbaVLriaH45TkPE287wErdOj9Xo8vpv6azyFR7I8jSoldsY7DCuaixZEvawWsDWe0qO8aaFIfY71kicVXs+bc4owXkt61/C8REt6AY+1UZ+Np4/Cqhxb6pUJW+NVEWvj4UbetHBozSE/bpp83MSbcno2nhQH99ZhMc9L0F4sRryF+ms8Es2mrzLOeFTfX3v6ZbVBhd8wjpsmX9/Mm3J6NV4kxQ95ToJ2HYuk+C+Pt1ExxqOnZvYLYR/kzSvFIBuPfj14LZ1EE8/nk2Sn6pTjcqlwjDfl9Gq8uCYu5TmJuOatN2ItVYzxCKW3G53SSbRnY1Xv9QbZeIG+2qilk6hGX1/JUxTCaPNsCPCgccw00QO4LvRkPCmix5YDPYgziKR43Ii3VHHGs71MOdFhdPOMO0sjhY/yklIZZOO1v/B2qx3addLQzKPghze0n0TrD/UsFX4kWZnAj9VJFsMlvRgvkuIWno/YMwzn00JZHm+r4oxHcwGzfGhlEw002zDIxiP85HG+WVMphdtshoTyGo+MNVWDt/F8RFwTG3l8FhVnPIJ2mzI6pyJyxmtDvyAK/23UVEb5IfLTT6MH4z3NcxG0+VEkxQ4en0XFGq/+hcXJ4C3voCrIGe95gvBao6aySeGBZFtIC/Ibz9vAcxGtEbGSx2ZVscYjVPONoHRkdFTZ5Yw3G4XfMuoqk3xMfXNPGnmMR1PE9tbhtTwX0aqJO3l8VhVvPKKBb0q+yLyzyixnPEbTgwC/Yj1M1E8p/KnNvd0M+Yy36GGeh6C3y0ZSHODxWTU/xiNonqAK6e2v5fvg0uSMlw4NGSi9z6hxoUSmyzgUlcd4cc27iuchpqQ3asTm0PwZbwaa0Nx+FXK5DeiM15l68wzw8avW8yfnQ/RGWhpqyPBLN0Nm40nx3O5VkDq1MZbeA0Z8Ds2/8Wagp2X0gkSF32/v+4+/A4V/AB//lHzp6e2sAbbaHaz3JTfPiejdbicLn53++/7kbaVJPMbJKuvkDa/49+ldqp5p726ln0yOQ8t/aMwp0L8FH7eAwkdA4cMQ4EOJaPczG9oz/+m4cynmzQaCoebp4I/RL+Ad0/23dbpfH5/uY9IToMKnEgX6qfbnMKOk72Z2EqPPfPsJBXrnCSmMQOEkKGqfrFr4INSbL+WnY0tW40U1cQ/PQUwveM01RYyrf8bLD/2HO1kORyai1XBuqybebavdw3A2z0HskrCEx+YVmZjndzgcDofD4XA4HA6Hw+FwOBwOh8PhcDgcDofDkcL/AJlWcCBsy3AMAAAAAElFTkSuQmCC"
+    originalImages: new Map(), // canvas src for preview
+    rawFiles: [],               // original files for ZIP
+    logoSrc: "data:image/png;base64,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" // your base64 logo
 };
+
 const dom = {
     dropZone: document.getElementById('dropZone'),
     imageUpload: document.getElementById('imageUpload'),
@@ -157,11 +171,14 @@ const dom = {
     datePicker: document.getElementById('datePicker'),
     progressBar: document.getElementById('progressBar')
 };
+
+// Default date today
 dom.datePicker.valueAsDate = new Date();
 
-// Events
+// Event listeners
 dom.imageUpload.addEventListener("change", e => handleFiles(e.target.files));
 dom.logoUpload.addEventListener("change", handleLogoUpload);
+
 dom.dropZone.addEventListener("dragover", e => { e.preventDefault(); dom.dropZone.classList.add("dragover"); });
 dom.dropZone.addEventListener("dragleave", () => dom.dropZone.classList.remove("dragover"));
 dom.dropZone.addEventListener("drop", e => { e.preventDefault(); dom.dropZone.classList.remove("dragover"); handleFiles(e.dataTransfer.files); });
@@ -169,12 +186,16 @@ dom.dropZone.addEventListener("drop", e => { e.preventDefault(); dom.dropZone.cl
 let timeout;
 function debouncedUpdate() { clearTimeout(timeout); timeout = setTimeout(updateImages, 300); }
 
-// Handle Files
+// Handle files
 function handleFiles(files) {
     dom.container.innerHTML = "";
     state.originalImages.clear();
+    state.rawFiles = [];
+
     [...files].forEach(file => {
         if (!file.type.startsWith('image/')) return;
+        state.rawFiles.push(file);
+
         const reader = new FileReader();
         reader.onload = ev => {
             const div = document.createElement("div");
@@ -188,7 +209,7 @@ function handleFiles(files) {
     });
 }
 
-// Handle Logo
+// Logo upload
 function handleLogoUpload(e) {
     const file = e.target.files[0];
     if (!file) return;
@@ -197,19 +218,16 @@ function handleLogoUpload(e) {
     reader.readAsDataURL(file);
 }
 
-// Update Images
-function updateImages() {
-    document.querySelectorAll(".image-card").forEach(processImage);
-}
+// Update all canvas previews
+function updateImages() { document.querySelectorAll(".image-card").forEach(processImage); }
 
-// Format Date
 function formatDate(dateString) {
     if (!dateString) return "";
     const date = new Date(dateString);
-    return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+    return date.toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' });
 }
 
-// Process Image with Compression
+// Process image for preview
 function processImage(container) {
     const src = state.originalImages.get(container);
     if (!src) return;
@@ -218,80 +236,71 @@ function processImage(container) {
     const img = new Image();
     img.src = src;
     img.onload = () => {
-        // Compression: scale large images down if > 2000px width for memory
-        let scale = 1;
-        if(img.width > 2000) scale = 2000 / img.width;
-        canvas.width = img.width * scale;
-        canvas.height = img.height * scale;
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        ctx.drawImage(img, 0, 0);
 
         const overlay = new Image();
         overlay.src = state.logoSrc;
-        overlay.onload = () => drawOverlayComponents(ctx, canvas, overlay);
-        if(overlay.complete) drawOverlayComponents(ctx, canvas, overlay);
+        overlay.onload = () => drawOverlayComponents(ctx, img, overlay);
+        if (overlay.complete) drawOverlayComponents(ctx, img, overlay);
     };
 }
 
-// Draw Overlay: Logo + Banner + Text
-function drawOverlayComponents(ctx, canvas, overlayImg) {
-    const imgWidth = canvas.width;
-    const imgHeight = canvas.height;
-
-    // Logo
-    const logoScale = Math.min(imgWidth * 0.2, imgHeight * 0.2) / overlayImg.width;
+function drawOverlayComponents(ctx, img, overlayImg) {
+    const logoScale = Math.min(img.width*0.2, img.height*0.2)/overlayImg.width;
     const finalScale = Math.min(logoScale, 2.0);
-    const logoW = overlayImg.width * finalScale;
-    const logoH = overlayImg.height * finalScale;
-    const padding = imgWidth * 0.03;
+    const logoW = overlayImg.width*finalScale;
+    const logoH = overlayImg.height*finalScale;
+    const padding = img.width*0.03;
     ctx.drawImage(overlayImg, padding, padding, logoW, logoH);
 
-    // Bottom Banner
-    const bannerHeight = Math.max(imgHeight * 0.06, 80);
+    const bannerHeight = Math.max(img.height*0.06, 80);
     ctx.fillStyle = "rgba(255,255,255,0.9)";
-    ctx.fillRect(0, imgHeight - bannerHeight, imgWidth, bannerHeight);
+    ctx.fillRect(0, img.height-bannerHeight, img.width, bannerHeight);
 
-    // Text
     const dateStr = formatDate(dom.datePicker.value);
     const descStr = dom.description.value.trim();
     const fullText = descStr ? `${descStr} | ${dateStr}` : dateStr;
-    let fontSize = bannerHeight * 0.5;
+
+    let fontSize = bannerHeight*0.5;
     ctx.font = `bold ${fontSize}px Arial`;
-    while(ctx.measureText(fullText).width > (imgWidth - 100) && fontSize > 20) {
-        fontSize -= 5;
-        ctx.font = `bold ${fontSize}px Arial`;
+    while (ctx.measureText(fullText).width > (img.width-100) && fontSize>20) {
+        fontSize -= 5; ctx.font = `bold ${fontSize}px Arial`;
     }
     ctx.fillStyle = "#000";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(fullText, imgWidth / 2, imgHeight - bannerHeight / 2);
+    ctx.fillText(fullText, img.width/2, img.height-(bannerHeight/2));
 }
 
-// Download Images
+// Download images + originals
 function downloadImages() {
-    const containers = document.querySelectorAll(".image-card");
-    if (containers.length === 0) return alert("Please upload images first.");
-    const date = dom.datePicker.value || "no-date";
-    const desc = dom.description.value.replace(/[^a-z0-9]/gi, '_').substring(0, 15) || "drone";
-    const filenameBase = `${desc}_${date}`;
-    if (containers.length === 1) {
-        containers[0].querySelector("canvas").toBlob(blob => saveAs(blob, `${filenameBase}.png`), "image/png", 0.92);
-        return;
-    }
+    if (state.rawFiles.length===0) return alert("Please upload images first.");
     const zip = new JSZip();
-    const folder = zip.folder("processed_photos");
-    let processed = 0;
-    containers.forEach((c, i) => {
-        c.querySelector("canvas").toBlob(blob => {
-            folder.file(`${filenameBase}_${String(i+1).padStart(3,"0")}.png`, blob);
-            processed++;
-            dom.progressBar.style.width = `${(processed/containers.length)*100}%`;
-            if(processed === containers.length) {
-                zip.generateAsync({type:"blob"}).then(content => {
-                    saveAs(content, `${filenameBase}_BATCH.zip`);
-                    setTimeout(()=>{dom.progressBar.style.width="0%";}, 2000);
+    const folderProcessed = zip.folder("processed_photos");
+    const folderOriginals = zip.folder("original_photos");
+
+    const containers = document.querySelectorAll(".image-card");
+    let processedCount = 0;
+
+    // Add original files
+    state.rawFiles.forEach(f => folderOriginals.file(f.name, f));
+
+    // Add processed canvas images
+    containers.forEach((c,i)=>{
+        const canvas = c.querySelector("canvas");
+        canvas.toBlob(blob=>{
+            folderProcessed.file(`${String(i+1).padStart(3,'0')}.png`, blob);
+            processedCount++;
+            dom.progressBar.style.width = `${(processedCount/containers.length)*100}%`;
+            if(processedCount===containers.length){
+                zip.generateAsync({type:"blob"}).then(content=>{
+                    saveAs(content, "DroneOps_Batch.zip");
+                    setTimeout(()=>{dom.progressBar.style.width="0%";},2000);
                 });
             }
-        }, "image/png", 0.92);
+        },"image/png");
     });
 }
 </script>
