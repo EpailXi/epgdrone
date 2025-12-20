@@ -17,6 +17,7 @@
     --text-color: #e0e0e0;
     --border-color: #444;
 }
+
 body {
     font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
     background-color: var(--bg-color);
@@ -24,6 +25,7 @@ body {
     margin: 0;
     padding-bottom: 50px;
 }
+
 header {
     background-color: var(--card-bg);
     padding: 15px 20px;
@@ -38,8 +40,11 @@ header {
     justify-content: center;
     border-bottom: 1px solid var(--border-color);
 }
+
 h1 { margin: 0; font-size: 1.2rem; color: #fff; margin-right: auto; }
+
 .control-group { display: flex; gap: 10px; align-items: center; }
+
 input[type="text"], input[type="date"] {
     padding: 8px;
     border-radius: 4px;
@@ -47,6 +52,7 @@ input[type="text"], input[type="date"] {
     background: #404040;
     color: white;
 }
+
 button {
     background-color: var(--primary);
     color: white;
@@ -60,6 +66,7 @@ button {
 button:hover { background-color: var(--primary-hover); }
 button.secondary { background-color: #444; }
 button.secondary:hover { background-color: #555; }
+
 .upload-zone {
     margin: 20px auto;
     max-width: 800px;
@@ -72,6 +79,7 @@ button.secondary:hover { background-color: #555; }
     cursor: pointer;
 }
 .upload-zone:hover, .upload-zone.dragover { border-color: var(--primary); }
+
 #imagesContainer {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
@@ -80,6 +88,7 @@ button.secondary:hover { background-color: #555; }
     max-width: 1600px;
     margin: 0 auto;
 }
+
 .image-card {
     background: var(--card-bg);
     padding: 10px;
@@ -89,13 +98,9 @@ button.secondary:hover { background-color: #555; }
     flex-direction: column;
     align-items: center;
 }
-canvas {
-    max-width: 100%;
-    height: auto;
-    border-radius: 4px;
-    box-shadow: 0 0 5px rgba(0,0,0,0.5); 
-}
-.meta-info { margin-top: 10px; font-size: 0.85rem; color: #aaa; }
+
+canvas { max-width: 100%; height: auto; border-radius: 4px; box-shadow: 0 0 5px rgba(0,0,0,0.5); }
+
 .progress-container {
     position: fixed;
     bottom: 0;
@@ -117,14 +122,17 @@ canvas {
 <body>
 
 <header>
-<h1>DroneOps Editor v2.0</h1>
+<h1>DroneOps Editor v3.0</h1>
+
 <div class="control-group">
     <input type="text" id="description" placeholder="Project Name / Location" oninput="debouncedUpdate()">
     <input type="date" id="datePicker" onchange="updateImages()">
 </div>
+
 <div class="control-group">
     <button class="secondary" onclick="document.getElementById('logoUpload').click()">Change Logo</button>
     <input type="file" id="logoUpload" accept="image/*" class="hidden">
+
     <button onclick="downloadImages()">Download All (ZIP)</button>
 </div>
 </header>
@@ -136,7 +144,10 @@ canvas {
 </div>
 
 <div id="imagesContainer"></div>
-<div class="progress-container"><div class="progress-bar" id="progressBar"></div></div>
+
+<div class="progress-container">
+<div class="progress-bar" id="progressBar"></div>
+</div>
 
 <script>
 const state = {
@@ -154,28 +165,34 @@ const dom = {
     progressBar: document.getElementById('progressBar')
 };
 
+// Set default date to today
 dom.datePicker.valueAsDate = new Date();
 
-dom.imageUpload.addEventListener("change", e => handleFiles(e.target.files));
-dom.logoUpload.addEventListener("change", handleLogoUpload);
-
+// Drag & Drop
 dom.dropZone.addEventListener("dragover", e => { e.preventDefault(); dom.dropZone.classList.add("dragover"); });
 dom.dropZone.addEventListener("dragleave", () => dom.dropZone.classList.remove("dragover"));
 dom.dropZone.addEventListener("drop", e => { e.preventDefault(); dom.dropZone.classList.remove("dragover"); handleFiles(e.dataTransfer.files); });
 
+// File inputs
+dom.imageUpload.addEventListener("change", e => handleFiles(e.target.files));
+dom.logoUpload.addEventListener("change", handleLogoUpload);
+
+// Debounce
 let timeout;
 function debouncedUpdate() { clearTimeout(timeout); timeout = setTimeout(updateImages, 300); }
 
 function handleFiles(files) {
     dom.container.innerHTML = "";
     state.originalImages.clear();
+
     [...files].forEach(file => {
         if (!file.type.startsWith('image/')) return;
+
         const reader = new FileReader();
         reader.onload = ev => {
             const div = document.createElement("div");
             div.className = "image-card";
-            div.innerHTML = `<canvas></canvas><div class="meta-info">${file.name}</div>`;
+            div.innerHTML = `<canvas></canvas>`;
             dom.container.appendChild(div);
             state.originalImages.set(div, ev.target.result);
             processImage(div);
@@ -205,6 +222,17 @@ function processImage(div) {
         canvas.width = img.width;
         canvas.height = img.height;
         ctx.drawImage(img, 0, 0);
+
+        // Draw Project Name and Date
+        const descStr = dom.description.value.trim() || "Project";
+        const dateStr = dom.datePicker.value || "";
+        ctx.fillStyle = "white";
+        ctx.font = `${Math.floor(canvas.width * 0.03)}px Arial`;
+        ctx.textBaseline = "bottom";
+        ctx.textAlign = "left";
+        ctx.fillText(`${descStr} ${dateStr}`, 20, canvas.height - 20);
+
+        // Draw logo if exists
         if (state.logoSrc) {
             const logo = new Image();
             logo.onload = () => {
@@ -224,17 +252,16 @@ function downloadImages() {
     const zip = new JSZip();
     const folderProcessed = zip.folder("Processed");
     const containers = Array.from(dom.container.querySelectorAll(".image-card"));
-    let count = 0;
+    if (!containers.length) return alert("No images uploaded!");
 
+    let count = 0;
     containers.forEach((c, i) => {
         const canvas = c.querySelector("canvas");
         canvas.toBlob(blob => {
-            // Custom filename
-            const descStr = dom.description.value.trim().replace(/[\\/:*?"<>|]/g, "") || "Project";
+            const descStr = dom.description.value.trim().replace(/[\\/:*?"<>|]/g, "_") || "Project";
             const dateStr = dom.datePicker.value ? dom.datePicker.value.replace(/-/g, "") : "nodate";
             const seq = String(i + 1).padStart(3, '0');
             const filename = `${descStr}_${dateStr}_${seq}.jpg`;
-
             folderProcessed.file(filename, blob);
 
             count++;
@@ -246,7 +273,7 @@ function downloadImages() {
                     setTimeout(() => { dom.progressBar.style.width = "0%"; }, 2000);
                 });
             }
-        }, "image/jpeg", 0.9); // quality 90%
+        }, "image/jpeg", 0.9);
     });
 }
 </script>
