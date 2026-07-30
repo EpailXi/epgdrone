@@ -108,7 +108,7 @@ canvas { max-width: 100%; height: auto; border-radius: 4px; box-shadow: 0 0 5px 
 </head>
 <body>
 <header>
-<h1>DroneOps Editor v3.3</h1>
+<h1>DroneOps Editor v3.4</h1>
 <div class="control-group">
     <input type="text" id="description" placeholder="Project Name / Location" oninput="debouncedUpdate()">
     <input type="date" id="datePicker" onchange="updateImages()">
@@ -213,50 +213,51 @@ function processImage(div) {
     };
     img.src = state.originalImages.get(div);
 }
-// Encode JPEG at full resolution, as close to (but under) TARGET_BYTES as possible
-// via binary search on quality. No EXIF/GPS carried over (all bytes go to image data).
+// Full-resolution JPEG, as close to (but under) TARGET_BYTES as possible.
+// Async toBlob = binary output (no giant base64 strings) and the UI never freezes.
 const TARGET_BYTES = 9900000; // 9.9 MB
-function encodeWithTarget(canvas) {
-    const sizeOf = d => Math.ceil((d.length - d.indexOf(',') - 1) * 3 / 4);
-    const encode = q => canvas.toDataURL("image/jpeg", q);
-    // If max quality already fits, keep it (best possible)
-    let best = encode(1.0);
-    if (sizeOf(best) <= TARGET_BYTES) return best;
-    // Binary search: highest quality whose size <= target
-    let lo = 0.4, hi = 1.0, found = null;
-    for (let i = 0; i < 8; i++) {
+function toBlobAsync(canvas, quality) {
+    return new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", quality));
+}
+async function encodeWithTarget(canvas) {
+    const first = await toBlobAsync(canvas, 1.0);
+    if (first && first.size <= TARGET_BYTES) return first; // already fits at max quality
+    let lo = 0.4, hi = 1.0, best = null;
+    for (let i = 0; i < 6; i++) {
         const mid = (lo + hi) / 2;
-        const d = encode(mid);
-        if (sizeOf(d) <= TARGET_BYTES) { found = d; lo = mid; } else { hi = mid; }
+        const b = await toBlobAsync(canvas, mid);
+        if (b.size <= TARGET_BYTES) { best = b; lo = mid; } else { hi = mid; }
     }
-    return found || encode(0.4); // extreme fallback: lowest tested quality
+    return best || await toBlobAsync(canvas, 0.4);
 }
 
-function downloadImages() {
-    const zip = new JSZip();
-    const folderProcessed = zip.folder("Processed");
+async function downloadImages() {
     const containers = Array.from(dom.container.querySelectorAll(".image-card"));
     if (!containers.length) return alert("No images uploaded!");
-    let count = 0;
-    containers.forEach((c, i) => {
-        const canvas = c.querySelector("canvas");
-        // Auto-tune quality so each file lands just under 9.9 MB (Lark inline-photo safe)
-        const finalData = encodeWithTarget(canvas);
-
+    const btn = document.querySelector('button[onclick="downloadImages()"]');
+    if (btn) { btn.disabled = true; btn.textContent = "Processing..."; }
+    try {
+        const zip = new JSZip();
+        const folderProcessed = zip.folder("Processed");
         const descStr = dom.description.value.trim().replace(/[\\/:*?"<>|]/g, "_") || "Project";
         const dateStr = dom.datePicker.value ? dom.datePicker.value.replace(/-/g, "") : "nodate";
-        const seq = String(i + 1).padStart(3, '0');
-        const filename = `${descStr}_${dateStr}_${seq}.jpg`;
-        folderProcessed.file(filename, finalData.split(",")[1], { base64: true });
-        count++;
-        dom.progressBar.style.width = `${(count / containers.length) * 100}%`;
-        if (count === containers.length) {
-            zip.generateAsync({ type: "blob" }).then(content => {
-                saveAs(content, "DroneOps_Batch.zip");
-                setTimeout(() => { dom.progressBar.style.width = "0%"; }, 2000);
-            });
+        // One image at a time — keeps memory flat even with many 15 MB+ photos
+        for (let i = 0; i < containers.length; i++) {
+            const canvas = containers[i].querySelector("canvas");
+            const blob = await encodeWithTarget(canvas);
+            const seq = String(i + 1).padStart(3, '0');
+            folderProcessed.file(`${descStr}_${dateStr}_${seq}.jpg`, blob);
+            dom.progressBar.style.width = `${((i + 1) / containers.length) * 90}%`;
+            await new Promise(r => setTimeout(r, 0)); // yield to UI between images
         }
-    });
+        // JPEGs are already compressed — STORE skips slow, pointless re-compression
+        const content = await zip.generateAsync({ type: "blob", compression: "STORE" });
+        dom.progressBar.style.width = "100%";
+        saveAs(content, "DroneOps_Batch.zip");
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = "Download All (ZIP)"; }
+        setTimeout(() => { dom.progressBar.style.width = "0%"; }, 2000);
+    }
 }
 </script>
 </body>
