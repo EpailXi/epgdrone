@@ -3,9 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>DroneOps Editor | Lossless Batch Processor</title>
+<title>DroneOps Editor | Batch Processor</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/piexifjs@1.0.6/piexif.js"></script>
 <style>
 :root {
     --bg-color: #1a1a1a;
@@ -37,7 +38,7 @@ header {
     border-bottom: 1px solid var(--border-color);
 }
 h1 { margin: 0; font-size: 1.2rem; color: #fff; margin-right: auto; }
-.control-group { display: flex; gap: 10px; align-items: center; }
+.control-group { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 input[type="text"], input[type="date"] {
     padding: 8px;
     border-radius: 4px;
@@ -56,6 +57,7 @@ button {
     font-weight: bold;
 }
 button:hover { background-color: var(--primary-hover); }
+button:disabled { opacity: 0.6; cursor: wait; }
 button.secondary { background-color: #444; }
 button.secondary:hover { background-color: #555; }
 .upload-zone {
@@ -70,14 +72,11 @@ button.secondary:hover { background-color: #555; }
     cursor: pointer;
 }
 .upload-zone:hover, .upload-zone.dragover { border-color: var(--primary); }
-#imagesContainer {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-    gap: 20px;
-    padding: 20px;
-    max-width: 1600px;
-    margin: 0 auto;
-}
+#imagesContainer { padding: 20px; max-width: 1600px; margin: 0 auto; }
+.batch { border: 1px solid var(--border-color); border-radius: 8px; padding: 10px; margin-bottom: 20px; }
+.batch-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.batch-head .batch-name { flex: 1; min-width: 200px; }
+.batch-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
 .image-card {
     background: var(--card-bg);
     padding: 10px;
@@ -87,6 +86,13 @@ button.secondary:hover { background-color: #555; }
     flex-direction: column;
     align-items: center;
 }
+.image-card .fname { font-size: 0.8rem; color: #aaa; margin-top: 6px; word-break: break-all; }
+.image-card .img-name { width: 100%; box-sizing: border-box; margin-top: 8px; }
+.image-card { cursor: pointer; user-select: none; }
+.image-card.selected { outline: 3px solid var(--primary); outline-offset: 2px; }
+#selBar { flex-basis: 100%; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: center; }
+#selBar.hidden { display: none; }
+#selCount { font-weight: bold; color: #fff; }
 canvas { max-width: 100%; height: auto; border-radius: 4px; box-shadow: 0 0 5px rgba(0,0,0,0.5); }
 .progress-container {
     position: fixed;
@@ -108,20 +114,31 @@ canvas { max-width: 100%; height: auto; border-radius: 4px; box-shadow: 0 0 5px 
 </head>
 <body>
 <header>
-<h1>DroneOps Editor v3.4</h1>
+<h1>DroneOps Editor v3.7</h1>
 <div class="control-group">
-    <input type="text" id="description" placeholder="Project Name / Location" oninput="debouncedUpdate()">
-    <input type="date" id="datePicker" onchange="updateImages()">
+    <input type="text" id="description" aria-label="Default project name" placeholder="Default Project Name" oninput="debouncedUpdate()">
+    <input type="date" id="datePicker" aria-label="Photo date" onchange="updateImages()">
 </div>
 <div class="control-group">
     <button class="secondary" onclick="document.getElementById('logoUpload').click()">Change Logo</button>
     <input type="file" id="logoUpload" accept="image/*" class="hidden">
-    <button onclick="downloadImages()">Download All (ZIP)</button>
+    <button class="secondary" onclick="document.getElementById('folderUpload').click()">Upload Folder</button>
+    <input type="file" id="folderUpload" webkitdirectory multiple class="hidden">
+    <button class="secondary" onclick="clearAll()">Clear All</button>
+    <button id="downloadBtn" onclick="downloadImages()">Download All (ZIP)</button>
+</div>
+<div id="selBar" class="hidden">
+    <span id="selCount"></span>
+    <input type="text" id="selName" aria-label="Project name for selected photos" placeholder="Project name for selected">
+    <button onclick="moveSelectedToBatch()">Move to New Batch</button>
+    <button class="secondary" onclick="nameSelected()">Set Name Only</button>
+    <button class="secondary" onclick="selectAll()">Select All</button>
+    <button class="secondary" onclick="clearSelection()">Clear Selection</button>
 </div>
 </header>
 <div class="upload-zone" id="dropZone" onclick="document.getElementById('imageUpload').click()">
-<h3>Click or Drag Drone Photos Here</h3>
-<p style="color: #888">Supports multiple JPG/PNG files</p>
+<h3>Click or Drag Drone Photos / Folders Here</h3>
+<p style="color: #888">Each upload = new batch with its own project name. Folders: each subfolder = one batch.<br>Mixed projects? Click photos to select (Shift+click = range), name them, then Move to New Batch.</p>
 <input type="file" id="imageUpload" accept="image/*" multiple class="hidden">
 </div>
 <div id="imagesContainer"></div>
@@ -129,133 +146,426 @@ canvas { max-width: 100%; height: auto; border-radius: 4px; box-shadow: 0 0 5px 
 <div class="progress-bar" id="progressBar"></div>
 </div>
 <script>
+const MAX_PREVIEW = 1000;        // preview canvas longest side (px)
+const TARGET_BYTES = 9900000;    // 9.9 MB per exported JPEG
+const EXIF_RESERVE = 65536;      // max EXIF segment size
+const PART_LIMIT = 1.5e9;        // split ZIP above ~1.5 GB
+const SAFE_PIXELS = 16000000;    // fallback size when browser canvas limit is hit
+
 const state = {
-    originalImages: new Map(),
-    logoSrc: "data:image/png;base64,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"
+    originalImages: new Map(),   // card div -> original File (no base64 copies)
+    logoSrc: "data:image/png;base64,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",
+    logoImg: null
 };
 const dom = {
     dropZone: document.getElementById('dropZone'),
     imageUpload: document.getElementById('imageUpload'),
+    folderUpload: document.getElementById('folderUpload'),
     logoUpload: document.getElementById('logoUpload'),
     container: document.getElementById('imagesContainer'),
     description: document.getElementById('description'),
     datePicker: document.getElementById('datePicker'),
-    progressBar: document.getElementById('progressBar')
+    progressBar: document.getElementById('progressBar'),
+    downloadBtn: document.getElementById('downloadBtn')
 };
-// Set default date to today
-dom.datePicker.valueAsDate = new Date();
-// Drag & Drop
-dom.dropZone.addEventListener("dragover", e => { e.preventDefault(); dom.dropZone.classList.add("dragover"); });
-dom.dropZone.addEventListener("dragleave", () => dom.dropZone.classList.remove("dragover"));
-dom.dropZone.addEventListener("drop", e => { e.preventDefault(); dom.dropZone.classList.remove("dragover"); handleFiles(e.dataTransfer.files); });
-// File inputs
-dom.imageUpload.addEventListener("change", e => handleFiles(e.target.files));
-dom.logoUpload.addEventListener("change", handleLogoUpload);
-// Debounce
-let timeout;
-function debouncedUpdate() { clearTimeout(timeout); timeout = setTimeout(updateImages, 300); }
-function handleFiles(files) {
-    dom.container.innerHTML = "";
-    state.originalImages.clear();
-    [...files].forEach(file => {
-        if (!file.type.startsWith('image/')) return;
-        const reader = new FileReader();
-        reader.onload = ev => {
-            const div = document.createElement("div");
-            div.className = "image-card";
-            div.innerHTML = `<canvas></canvas>`;
-            dom.container.appendChild(div);
-            state.originalImages.set(div, ev.target.result);
-            processImage(div);
-        };
-        reader.readAsDataURL(file);
+
+// Local date (not UTC)
+(() => {
+    const d = new Date(), p = n => String(n).padStart(2, '0');
+    dom.datePicker.value = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+})();
+
+// ---------- Image helpers ----------
+function loadImage(src) {
+    return new Promise((res, rej) => {
+        const i = new Image();
+        i.onload = () => res(i);
+        i.onerror = () => rej(new Error("Image load failed"));
+        i.src = src;
     });
 }
-function handleLogoUpload(e) {
-    const file = e.target.files[0];
-    if (file) {
-        const reader = new FileReader();
-        reader.onload = ev => { state.logoSrc = ev.target.result; updateImages(); };
-        reader.readAsDataURL(file);
+async function loadFileImage(file) {
+    const url = URL.createObjectURL(file);
+    try { return await loadImage(url); } finally { URL.revokeObjectURL(url); }
+}
+async function setLogo(src) {
+    try { state.logoImg = await loadImage(src); } catch { state.logoImg = null; }
+}
+let logoReady = setLogo(state.logoSrc);
+
+// ---------- Drag & Drop (files and folders) ----------
+dom.dropZone.addEventListener("dragover", e => { e.preventDefault(); dom.dropZone.classList.add("dragover"); });
+dom.dropZone.addEventListener("dragleave", () => dom.dropZone.classList.remove("dragover"));
+dom.dropZone.addEventListener("drop", async e => {
+    e.preventDefault();
+    dom.dropZone.classList.remove("dragover");
+    const entries = [...(e.dataTransfer.items || [])]
+        .map(i => i.webkitGetAsEntry ? i.webkitGetAsEntry() : null).filter(Boolean);
+    if (entries.some(en => en.isDirectory)) {
+        const out = [];
+        for (const en of entries) await walkEntry(en, "", out);
+        groupAndAdd(out);
+    } else {
+        handleFiles(e.dataTransfer.files);
+    }
+});
+async function walkEntry(entry, parent, out) {
+    if (entry.isFile) {
+        const file = await new Promise((res, rej) => entry.file(res, rej));
+        out.push({ file, dir: parent });
+    } else if (entry.isDirectory) {
+        const path = parent ? `${parent}/${entry.name}` : entry.name;
+        const reader = entry.createReader();
+        for (;;) {
+            const batch = await new Promise((res, rej) => reader.readEntries(res, rej));
+            if (!batch.length) break;
+            for (const c of batch) await walkEntry(c, path, out);
+        }
     }
 }
-function updateImages() {
-    state.originalImages.forEach((_, div) => processImage(div));
+
+// ---------- File inputs ----------
+dom.imageUpload.addEventListener("change", e => { handleFiles(e.target.files); e.target.value = ""; });
+dom.folderUpload.addEventListener("change", e => { handleFolder(e.target.files); e.target.value = ""; });
+dom.logoUpload.addEventListener("change", handleLogoUpload);
+
+let timeout;
+function debouncedUpdate() { clearTimeout(timeout); timeout = setTimeout(updateImages, 300); }
+
+function handleFolder(files) {
+    groupAndAdd([...files].map(f => {
+        const p = (f.webkitRelativePath || f.name).split('/');
+        return { file: f, dir: p.slice(0, -1).join('/') };
+    }));
 }
-function processImage(div) {
-    const canvas = div.querySelector("canvas");
-    const ctx = canvas.getContext("2d");
-    const img = new Image();
-    img.onload = () => {
-        canvas.width = img.width;
-        canvas.height = img.height;
-        ctx.drawImage(img, 0, 0);
-        // Draw Project Name and Date
-        const descStr = dom.description.value.trim() || "Project";
-        const dateStr = dom.datePicker.value || "";
-        ctx.fillStyle = "white";
-        ctx.font = `${Math.floor(canvas.width * 0.03)}px Arial`;
-        ctx.textBaseline = "bottom";
-        ctx.textAlign = "left";
-        ctx.fillText(`${descStr} ${dateStr}`, 20, canvas.height - 20);
-        // Draw logo if exists
-        if (state.logoSrc) {
-            const logo = new Image();
-            logo.onload = () => {
-                const logoWidth = img.width * 0.15;
-                const logoHeight = logo.height / logo.width * logoWidth;
-                ctx.globalAlpha = 0.8;
-                ctx.drawImage(logo, img.width - logoWidth - 20, img.height - logoHeight - 20, logoWidth, logoHeight);
-                ctx.globalAlpha = 1.0;
-            };
-            logo.src = state.logoSrc;
-        }
+// Group by full folder path (so A/Site1 and B/Site1 stay separate batches)
+function groupAndAdd(items) {
+    const groups = new Map();
+    items.forEach(({ file, dir }) => {
+        if (!groups.has(dir)) groups.set(dir, []);
+        groups.get(dir).push(file);
+    });
+    [...groups.keys()].sort().forEach(dir => {
+        const files = groups.get(dir).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+        handleFiles(files, dir.split('/').pop());
+    });
+}
+
+let previewQueue = Promise.resolve(); // decode previews one at a time
+function createBatch(name) {
+    const batch = document.createElement("div");
+    batch.className = "batch";
+    batch.innerHTML = `<div class="batch-head"><strong class="batch-title"></strong>
+        <input type="text" class="batch-name" aria-label="Batch project name" placeholder="Project name (blank = header default)">
+        <button class="secondary">Remove</button></div><div class="batch-grid"></div>`;
+    const nameInput = batch.querySelector(".batch-name");
+    nameInput.value = name || "";
+    nameInput.oninput = () => {
+        clearTimeout(nameInput._t);
+        nameInput._t = setTimeout(() => batch.querySelectorAll(".image-card").forEach(processImage), 300);
     };
-    img.src = state.originalImages.get(div);
+    batch.querySelector("button").onclick = () => {
+        batch.querySelectorAll(".image-card").forEach(d => state.originalImages.delete(d));
+        batch.remove();
+        renumberBatches();
+        updateSelBar();
+    };
+    dom.container.appendChild(batch);
+    return batch;
 }
-// Full-resolution JPEG, as close to (but under) TARGET_BYTES as possible.
-// Async toBlob = binary output (no giant base64 strings) and the UI never freezes.
-const TARGET_BYTES = 9900000; // 9.9 MB
+function handleFiles(files, defaultName) {
+    const imgs = [...files].filter(f => f.type.startsWith('image/'));
+    if (!imgs.length) return;
+    const grid = createBatch(defaultName).querySelector(".batch-grid");
+    imgs.forEach(file => {
+        const div = document.createElement("div");
+        div.className = "image-card";
+        div.innerHTML = `<canvas></canvas><div class="fname"></div>
+            <input type="text" class="img-name" aria-label="Photo name override" placeholder="Override name (optional)">`;
+        div.querySelector(".fname").textContent = file.name;
+        const inp = div.querySelector(".img-name");
+        inp.oninput = () => { clearTimeout(inp._t); inp._t = setTimeout(() => processImage(div), 300); };
+        grid.appendChild(div);
+        state.originalImages.set(div, file);
+        previewQueue = previewQueue.then(() => buildPreview(div));
+    });
+    renumberBatches();
+}
+function renumberBatches() {
+    dom.container.querySelectorAll(".batch").forEach((b, i) => {
+        b.querySelector(".batch-title").textContent = `Batch ${i + 1} (${b.querySelectorAll(".image-card").length})`;
+    });
+}
+function clearAll() { dom.container.innerHTML = ""; state.originalImages.clear(); updateSelBar(); }
+
+// ---------- Manual selection (click = toggle, Shift+click = range) ----------
+const selBar = document.getElementById('selBar');
+const selName = document.getElementById('selName');
+let lastClicked = null;
+const allCards = () => [...dom.container.querySelectorAll(".image-card")];
+const selectedCards = () => [...dom.container.querySelectorAll(".image-card.selected")];
+dom.container.addEventListener("click", e => {
+    const card = e.target.closest(".image-card");
+    if (!card || e.target.closest("input, button")) return;
+    if (e.shiftKey && lastClicked && lastClicked.isConnected) {
+        const cards = allCards();
+        const [s, t] = [cards.indexOf(lastClicked), cards.indexOf(card)].sort((x, y) => x - y);
+        cards.slice(s, t + 1).forEach(c => c.classList.add("selected"));
+    } else {
+        card.classList.toggle("selected");
+    }
+    lastClicked = card;
+    updateSelBar();
+});
+function updateSelBar() {
+    const n = selectedCards().length;
+    selBar.classList.toggle("hidden", n === 0);
+    document.getElementById('selCount').textContent = `${n} selected`;
+}
+function selectAll() { allCards().forEach(c => c.classList.add("selected")); updateSelBar(); }
+function clearSelection() { selectedCards().forEach(c => c.classList.remove("selected")); lastClicked = null; updateSelBar(); }
+function moveSelectedToBatch() {
+    const sel = selectedCards();
+    if (!sel.length) return;
+    const name = selName.value.trim();
+    if (!name && !confirm("No project name entered. Move anyway (uses header default)?")) return;
+    const oldBatches = new Set(sel.map(c => c.closest(".batch")));
+    const grid = createBatch(name).querySelector(".batch-grid");
+    sel.forEach(c => {
+        c.classList.remove("selected");
+        c.querySelector(".img-name").value = "";
+        grid.appendChild(c);
+        processImage(c);
+    });
+    oldBatches.forEach(b => { if (!b.querySelector(".image-card")) b.remove(); });
+    selName.value = "";
+    lastClicked = null;
+    renumberBatches();
+    updateSelBar();
+}
+function nameSelected() {
+    const sel = selectedCards();
+    const name = selName.value.trim();
+    if (!sel.length) return;
+    if (!name) return alert("Enter a project name first.");
+    sel.forEach(c => { c.querySelector(".img-name").value = name; processImage(c); });
+    clearSelection();
+    selName.value = "";
+}
+
+// Priority: photo override > batch name > header default > "Project"
+function getName(div) {
+    return div.querySelector(".img-name").value.trim()
+        || div.closest(".batch").querySelector(".batch-name").value.trim()
+        || dom.description.value.trim() || "Project";
+}
+function labelFor(div) { return `${getName(div)} ${dom.datePicker.value || ""}`.trim(); }
+function safeName(s) {
+    return s.replace(/[\\/:*?"<>|\x00-\x1f]/g, "_").replace(/[. ]+$/, "").trim() || "Project";
+}
+
+async function handleLogoUpload(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async ev => {
+        state.logoSrc = ev.target.result;
+        logoReady = setLogo(state.logoSrc);
+        await logoReady;
+        updateImages();
+    };
+    reader.readAsDataURL(file);
+}
+
+// ---------- Drawing (shared by preview and export) ----------
+function drawOverlay(ctx, w, h, text) {
+    const pad = Math.round(w * 0.015);
+    let logoW = 0;
+    if (state.logoImg) {
+        logoW = w * 0.15;
+        const logoH = state.logoImg.height / state.logoImg.width * logoW;
+        ctx.globalAlpha = 0.8;
+        ctx.drawImage(state.logoImg, w - logoW - pad, h - logoH - pad, logoW, logoH);
+        ctx.globalAlpha = 1.0;
+    }
+    let size = Math.max(10, Math.floor(w * 0.03));
+    ctx.font = `${size}px Arial`;
+    const maxW = w - logoW - pad * 3;
+    const tw = ctx.measureText(text).width;
+    if (tw > maxW) { size = Math.max(8, Math.floor(size * maxW / tw)); ctx.font = `${size}px Arial`; }
+    ctx.textBaseline = "bottom";
+    ctx.textAlign = "left";
+    ctx.lineJoin = "round";
+    ctx.lineWidth = Math.max(2, size * 0.12);
+    ctx.strokeStyle = "rgba(0,0,0,0.75)";
+    ctx.strokeText(text, pad, h - pad);
+    ctx.fillStyle = "white";
+    ctx.fillText(text, pad, h - pad);
+}
+
+// Small preview only — full-res is rendered at export time
+async function buildPreview(div) {
+    const file = state.originalImages.get(div);
+    if (!file) return;
+    await logoReady;
+    try {
+        const img = await loadFileImage(file);
+        const s = Math.min(1, MAX_PREVIEW / Math.max(img.width, img.height));
+        const c = document.createElement("canvas");
+        c.width = Math.round(img.width * s);
+        c.height = Math.round(img.height * s);
+        c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+        img.src = "";
+        div._base = c;
+        processImage(div);
+    } catch {
+        div.querySelector(".fname").textContent += " (failed to load)";
+    }
+}
+function updateImages() { state.originalImages.forEach((_, div) => processImage(div)); }
+function processImage(div) {
+    const base = div._base;
+    if (!base || !state.originalImages.has(div)) return;
+    const canvas = div.querySelector("canvas");
+    canvas.width = base.width;
+    canvas.height = base.height;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(base, 0, 0);
+    drawOverlay(ctx, base.width, base.height, labelFor(div));
+}
+
+// ---------- Export ----------
+const exportCanvas = document.createElement("canvas");
+function renderFull(img, scale, text) {
+    const w = Math.round(img.width * scale), h = Math.round(img.height * scale);
+    exportCanvas.width = w;
+    exportCanvas.height = h;
+    const ctx = exportCanvas.getContext("2d");
+    if (!ctx) throw new Error("Canvas too large");
+    ctx.drawImage(img, 0, 0, w, h);
+    drawOverlay(ctx, w, h, text);
+    return { w, h };
+}
 function toBlobAsync(canvas, quality) {
     return new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", quality));
 }
-async function encodeWithTarget(canvas) {
+async function encodeWithTarget(canvas, target) {
     const first = await toBlobAsync(canvas, 1.0);
-    if (first && first.size <= TARGET_BYTES) return first; // already fits at max quality
+    if (!first) return null;
+    if (first.size <= target) return first;
     let lo = 0.4, hi = 1.0, best = null;
     for (let i = 0; i < 6; i++) {
         const mid = (lo + hi) / 2;
         const b = await toBlobAsync(canvas, mid);
-        if (b.size <= TARGET_BYTES) { best = b; lo = mid; } else { hi = mid; }
+        if (!b) return null;
+        if (b.size <= target) { best = b; lo = mid; } else { hi = mid; }
     }
     return best || await toBlobAsync(canvas, 0.4);
 }
 
-async function downloadImages() {
-    const containers = Array.from(dom.container.querySelectorAll(".image-card"));
-    if (!containers.length) return alert("No images uploaded!");
-    const btn = document.querySelector('button[onclick="downloadImages()"]');
-    if (btn) { btn.disabled = true; btn.textContent = "Processing..."; }
+function blobToBinary(blob) {
+    return new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = () => res(r.result);
+        r.onerror = rej;
+        r.readAsBinaryString(blob);
+    });
+}
+async function loadExif(file) {
+    if (typeof piexif === "undefined" || file.type !== "image/jpeg") return null;
     try {
-        const zip = new JSZip();
-        const folderProcessed = zip.folder("Processed");
-        const descStr = dom.description.value.trim().replace(/[\\/:*?"<>|]/g, "_") || "Project";
-        const dateStr = dom.datePicker.value ? dom.datePicker.value.replace(/-/g, "") : "nodate";
-        // One image at a time — keeps memory flat even with many 15 MB+ photos
-        for (let i = 0; i < containers.length; i++) {
-            const canvas = containers[i].querySelector("canvas");
-            const blob = await encodeWithTarget(canvas);
-            const seq = String(i + 1).padStart(3, '0');
-            folderProcessed.file(`${descStr}_${dateStr}_${seq}.jpg`, blob);
-            dom.progressBar.style.width = `${((i + 1) / containers.length) * 90}%`;
-            await new Promise(r => setTimeout(r, 0)); // yield to UI between images
+        const exif = piexif.load(await blobToBinary(file.slice(0, 524288)));
+        const has = k => exif[k] && Object.keys(exif[k]).length;
+        return (has("0th") || has("Exif") || has("GPS")) ? exif : null;
+    } catch { return null; }
+}
+async function insertExif(blob, exif, dims) {
+    try {
+        exif["0th"] = exif["0th"] || {};
+        exif["0th"][piexif.ImageIFD.Orientation] = 1; // pixels are already upright
+        if (exif.Exif) {
+            exif.Exif[piexif.ExifIFD.PixelXDimension] = dims.w;
+            exif.Exif[piexif.ExifIFD.PixelYDimension] = dims.h;
         }
-        // JPEGs are already compressed — STORE skips slow, pointless re-compression
-        const content = await zip.generateAsync({ type: "blob", compression: "STORE" });
+        exif.thumbnail = null;
+        exif["1st"] = {};
+        let bytes;
+        try { bytes = piexif.dump(exif); }
+        catch { if (exif.Exif) delete exif.Exif[piexif.ExifIFD.MakerNote]; bytes = piexif.dump(exif); }
+        const out = piexif.insert(bytes, await blobToBinary(blob));
+        const arr = new Uint8Array(out.length);
+        for (let i = 0; i < out.length; i++) arr[i] = out.charCodeAt(i);
+        return new Blob([arr], { type: "image/jpeg" });
+    } catch (e) {
+        console.warn("EXIF skipped:", e);
+        return blob;
+    }
+}
+async function exportOne(div) {
+    const file = state.originalImages.get(div);
+    const img = await loadFileImage(file);
+    const text = labelFor(div);
+    const exif = await loadExif(file);
+    const target = TARGET_BYTES - (exif ? EXIF_RESERVE : 0);
+    let scale = 1, dims = null, blob = null;
+    try { dims = renderFull(img, 1, text); blob = await encodeWithTarget(exportCanvas, target); } catch { blob = null; }
+    if (!blob) { // browser canvas limit hit — retry at safe size
+        scale = Math.min(1, Math.sqrt(SAFE_PIXELS / (img.width * img.height)));
+        dims = renderFull(img, scale, text);
+        blob = await encodeWithTarget(exportCanvas, target);
+    }
+    exportCanvas.width = exportCanvas.height = 1; // free memory
+    img.src = "";
+    if (!blob) throw new Error("Encode failed");
+    if (exif) blob = await insertExif(blob, exif, dims);
+    return { blob, downscaled: scale < 1 };
+}
+async function saveZip(zip, fname) {
+    const content = await zip.generateAsync({ type: "blob", compression: "STORE" });
+    saveAs(content, fname);
+}
+async function downloadImages() {
+    const cards = [...dom.container.querySelectorAll(".image-card")].filter(d => state.originalImages.has(d));
+    if (!cards.length) return alert("No images uploaded!");
+    const btn = dom.downloadBtn;
+    btn.disabled = true;
+    btn.textContent = "Processing...";
+    const failed = [];
+    let downscaled = 0;
+    try {
+        await logoReady;
+        const dateStr = dom.datePicker.value ? dom.datePicker.value.replace(/-/g, "") : "nodate";
+        const counters = {}, folders = {};
+        let zip = new JSZip(), partBytes = 0, part = 1;
+        for (let i = 0; i < cards.length; i++) {
+            const card = cards[i];
+            let res;
+            try { res = await exportOne(card); }
+            catch { failed.push(state.originalImages.get(card).name); continue; }
+            if (res.downscaled) downscaled++;
+            const raw = safeName(getName(card));
+            const key = raw.toLowerCase();          // case-insensitive (Windows-safe)
+            const name = folders[key] || (folders[key] = raw);
+            counters[key] = (counters[key] || 0) + 1;
+            if (partBytes && partBytes + res.blob.size > PART_LIMIT) {
+                await saveZip(zip, `DroneOps_Batch_part${part}.zip`);
+                zip = new JSZip(); partBytes = 0; part++;
+            }
+            const seq = String(counters[key]).padStart(3, '0');
+            zip.file(`Processed/${name}/${name}_${dateStr}_${seq}.jpg`, res.blob);
+            partBytes += res.blob.size;
+            dom.progressBar.style.width = `${((i + 1) / cards.length) * 90}%`;
+            await new Promise(r => setTimeout(r, 0));
+        }
+        if (partBytes) await saveZip(zip, part === 1 ? "DroneOps_Batch.zip" : `DroneOps_Batch_part${part}.zip`);
         dom.progressBar.style.width = "100%";
-        saveAs(content, "DroneOps_Batch.zip");
+        const notes = [];
+        if (failed.length) notes.push(`Failed (${failed.length}): ${failed.join(", ")}`);
+        if (downscaled) notes.push(`${downscaled} photo(s) downscaled — browser canvas size limit.`);
+        if (notes.length) alert(notes.join("\n"));
     } finally {
-        if (btn) { btn.disabled = false; btn.textContent = "Download All (ZIP)"; }
+        btn.disabled = false;
+        btn.textContent = "Download All (ZIP)";
         setTimeout(() => { dom.progressBar.style.width = "0%"; }, 2000);
     }
 }
