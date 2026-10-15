@@ -270,11 +270,19 @@ async function setViewOnly(token, chatId) {
         json: { link_share_entity: "tenant_readable", security_entity: "anyone_can_view", share_entity: "only_full_access" }
     });
 }
-async function postToGroup(chatId, title, files) {
+// Bot posts the message (falls back to posting as the user if the bot isn't in the group)
+async function postToGroup(project, chatId, title, files) {
     const content = { zh_cn: { title, content: files.map(f => [{ tag: "a", text: f.name, href: `${FEISHU.DOMAIN}/file/${f.token}` }]) } };
-    await api("/open-apis/im/v1/messages?receive_id_type=chat_id", {
-        json: { receive_id: chatId, msg_type: "post", content: JSON.stringify(content) }
-    });
+    try {
+        await api("/bot/post", { json: { project, content: JSON.stringify(content) } });
+        return "bot";
+    } catch (e) {
+        console.warn("Bot post failed, posting as user:", e.message);
+        await api("/open-apis/im/v1/messages?receive_id_type=chat_id", {
+            json: { receive_id: chatId, msg_type: "post", content: JSON.stringify(content) }
+        });
+        return "user";
+    }
 }
 // OAuth callback
 (async () => {
@@ -287,6 +295,9 @@ async function postToGroup(chatId, title, files) {
     try { await tokenRequest({ grant_type: "authorization_code", code }); }
     catch (e) { alert(e.message); }
 })();
+// Inside the Lark/Feishu app: log in automatically (no extra click)
+const IN_LARK = /Lark|Feishu/i.test(navigator.userAgent);
+if (IN_LARK && !getToken() && !new URLSearchParams(location.search).get("code")) feishuLogin();
 
 // Local date (not UTC)
 (() => {
@@ -691,8 +702,8 @@ async function downloadImages(mode) {
                 await setViewOnly(token, chatId);
                 uploaded.push({ name: zips[z].name, token });
             }
-            await postToGroup(chatId, zipBase, uploaded);
-            notes0.push(`Posted to "${FEISHU.GROUPS[project]}".`);
+            const by = await postToGroup(project, chatId, zipBase, uploaded);
+            notes0.push(`Posted to "${FEISHU.GROUPS[project]}"${by === "user" ? " (as you — add the bot to this group to post as bot)" : " by bot"}.`);
         }
         dom.progressBar.style.width = "100%";
         const notes = notes0;

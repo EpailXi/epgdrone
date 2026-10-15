@@ -4,7 +4,10 @@
 1. Create **企业自建应用**; note **App ID** + **App Secret**.
 2. 安全设置 → 重定向URL: `https://epailxi.github.io/epgdrone/`
 3. 权限管理 → add **user** scopes: `drive:drive`, `im:message.send_as_user`, `im:chat:readonly`, `offline_access`.
-4. Publish a version; admin approves.
+4. Add features: **Bot** + **Web app** (homepage `https://epailxi.github.io/epgdrone/`).
+5. Tenant scopes: `im:message:send_as_bot`, `im:chat:readonly`.
+6. Publish a version; admin approves.
+7. Add the bot to both groups (group → Settings → Bots → Add Bot → EPG Drone Photo Poster).
 
 ## 2. Cloudflare Worker
 1. dash.cloudflare.com → Workers → Create → name `epg-feishu` → paste `2026-10-15-feishu-worker.js` → Deploy.

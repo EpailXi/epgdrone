@@ -11,6 +11,9 @@ const ALLOW = new Set([
 ]);
 const ALLOW_RE = /^\/open-apis\/drive\/v1\/permissions\/[A-Za-z0-9]+\/(members|public)$/;
 
+const GROUPS = { KVTP: "吉隆坡KVTP-A ME项目", BTP: "BTP-A&B 项目管理" };
+const json = (o, cors) => new Response(JSON.stringify(o), { headers: { ...cors, "Content-Type": "application/json" } });
+
 export default {
   async fetch(req, env) {
     const origins = (env.ALLOWED_ORIGIN || "").split(",").map(s => s.trim());
@@ -34,6 +37,31 @@ export default {
       else return new Response("Bad grant", { status: 400, headers: cors });
       upstream = await fetch(`${API}/open-apis/authen/v2/oauth/token`, {
         method: "POST", headers: { "Content-Type": "application/json; charset=utf-8" }, body: JSON.stringify(body),
+      });
+    } else if (url.pathname === "/bot/post" && req.method === "POST") {
+      // Caller must be a logged-in user of this app
+      const me = await (await fetch(`${API}/open-apis/authen/v1/user_info`, {
+        headers: { Authorization: req.headers.get("Authorization") || "" },
+      })).json();
+      if (me.code !== 0) return json({ code: 401, msg: "Not logged in" }, cors);
+      const { project, content } = await req.json();
+      const name = GROUPS[project];
+      if (!name) return json({ code: 400, msg: "Unknown project" }, cors);
+      const t = await (await fetch(`${API}/open-apis/auth/v3/tenant_access_token/internal`, {
+        method: "POST", headers: { "Content-Type": "application/json; charset=utf-8" },
+        body: JSON.stringify({ app_id: env.APP_ID, app_secret: env.APP_SECRET }),
+      })).json();
+      const bot = { Authorization: `Bearer ${t.tenant_access_token}`, "Content-Type": "application/json; charset=utf-8" };
+      let chatId = null, pageToken = "";
+      do {
+        const r = await (await fetch(`${API}/open-apis/im/v1/chats?page_size=100${pageToken ? "&page_token=" + pageToken : ""}`, { headers: bot })).json();
+        if (r.code !== 0) return json(r, cors);
+        chatId = (r.data.items || []).find(c => c.name === name)?.chat_id || null;
+        pageToken = r.data.has_more ? r.data.page_token : "";
+      } while (!chatId && pageToken);
+      if (!chatId) return json({ code: 404, msg: `Bot is not in group "${name}"` }, cors);
+      upstream = await fetch(`${API}/open-apis/im/v1/messages?receive_id_type=chat_id`, {
+        method: "POST", headers: bot, body: JSON.stringify({ receive_id: chatId, msg_type: "post", content }),
       });
     } else if (ALLOW.has(url.pathname) || ALLOW_RE.test(url.pathname)) {
       const headers = { Authorization: req.headers.get("Authorization") || "" };
