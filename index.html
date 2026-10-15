@@ -127,6 +127,14 @@ canvas { max-width: 100%; height: auto; border-radius: 4px; box-shadow: 0 0 5px 
     <button class="secondary" onclick="clearAll()">Clear All</button>
     <button id="downloadBtn" onclick="downloadImages()">Download All (ZIP)</button>
 </div>
+<div class="control-group">
+    <select id="projectPicker" aria-label="Project">
+        <option value="KVTP">KVTP</option>
+        <option value="BTP">BTP</option>
+    </select>
+    <button class="secondary" id="feishuLoginBtn" onclick="feishuLogin()">Login with Feishu</button>
+    <button id="feishuPostBtn" onclick="downloadImages('feishu')">Post to Feishu</button>
+</div>
 <div id="selBar" class="hidden">
     <span id="selCount"></span>
     <input type="text" id="selName" aria-label="Project name for selected photos" placeholder="Project name for selected">
@@ -166,8 +174,110 @@ const dom = {
     description: document.getElementById('description'),
     datePicker: document.getElementById('datePicker'),
     progressBar: document.getElementById('progressBar'),
-    downloadBtn: document.getElementById('downloadBtn')
+    downloadBtn: document.getElementById('downloadBtn'),
+    projectPicker: document.getElementById('projectPicker'),
+    feishuLoginBtn: document.getElementById('feishuLoginBtn'),
+    feishuPostBtn: document.getElementById('feishuPostBtn')
 };
+
+// ---------- Feishu ----------
+const FEISHU = {
+    APP_ID: "cli_REPLACE_ME",                                  // Feishu app ID
+    WORKER: "https://epg-feishu.REPLACE_ME.workers.dev",       // Cloudflare Worker URL
+    DOMAIN: "https://twswzvv3ark.feishu.cn",
+    FOLDER: "C0JKf5TzFlxGxZdblO6cH7bIn9b",                     // Drive folder token
+    GROUPS: { KVTP: "吉隆坡KVTP-A ME项目", BTP: "BTP-A&B 项目管理" },
+    SCOPES: "drive:file:upload im:message.send_as_user im:chat:readonly offline_access"
+};
+const TOKEN_KEY = "feishuToken";
+const redirectUri = () => location.origin + location.pathname;
+function getToken() { try { return JSON.parse(localStorage.getItem(TOKEN_KEY)); } catch { return null; } }
+function setToken(t) {
+    try { t ? localStorage.setItem(TOKEN_KEY, JSON.stringify(t)) : localStorage.removeItem(TOKEN_KEY); } catch {}
+    dom.feishuLoginBtn.textContent = t ? "Feishu: logged in (logout)" : "Login with Feishu";
+}
+function feishuLogin() {
+    if (getToken()) return setToken(null);
+    if (state.originalImages.size && !confirm("Login reloads the page and clears loaded photos. Continue?")) return;
+    const s = crypto.randomUUID();
+    try { sessionStorage.setItem("feishuState", s); } catch {}
+    const q = new URLSearchParams({ client_id: FEISHU.APP_ID, redirect_uri: redirectUri(), scope: FEISHU.SCOPES, state: s });
+    location.href = `https://accounts.feishu.cn/open-apis/authen/v1/authorize?${q}`;
+}
+async function tokenRequest(body) {
+    const r = await (await fetch(`${FEISHU.WORKER}/token`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+    })).json();
+    if (!r.access_token) throw new Error(r.error_description || r.msg || "Feishu login failed");
+    const t = { access: r.access_token, refresh: r.refresh_token, exp: Date.now() + (r.expires_in - 60) * 1000 };
+    setToken(t);
+    return t;
+}
+async function accessToken() {
+    let t = getToken();
+    if (!t) throw new Error("Login with Feishu first.");
+    if (Date.now() > t.exp) {
+        if (!t.refresh) { setToken(null); throw new Error("Session expired — login with Feishu again."); }
+        try { t = await tokenRequest({ grant_type: "refresh_token", refresh_token: t.refresh }); }
+        catch (e) { setToken(null); throw e; }
+    }
+    return t.access;
+}
+async function api(path, opts = {}) {
+    const headers = { Authorization: `Bearer ${await accessToken()}` };
+    if (opts.json) { headers["Content-Type"] = "application/json; charset=utf-8"; opts.body = JSON.stringify(opts.json); }
+    const r = await (await fetch(FEISHU.WORKER + path, { method: opts.body ? "POST" : "GET", headers, body: opts.body })).json();
+    if (r.code !== 0) throw new Error(`Feishu ${path.split("?")[0]}: ${r.msg} (${r.code})`);
+    return r.data;
+}
+async function uploadToDrive(blob, name, onProgress) {
+    const base = { file_name: name, parent_type: "explorer", parent_node: FEISHU.FOLDER, size: String(blob.size) };
+    if (blob.size <= 20 * 1024 * 1024) {
+        const fd = new FormData();
+        Object.entries(base).forEach(([k, v]) => fd.append(k, v));
+        fd.append("file", blob, name);
+        const d = await api("/open-apis/drive/v1/files/upload_all", { body: fd });
+        onProgress(1);
+        return d.file_token;
+    }
+    const prep = await api("/open-apis/drive/v1/files/upload_prepare", { json: { ...base, size: blob.size } });
+    for (let seq = 0; seq < prep.block_num; seq++) {
+        const chunk = blob.slice(seq * prep.block_size, (seq + 1) * prep.block_size);
+        const fd = new FormData();
+        fd.append("upload_id", prep.upload_id);
+        fd.append("seq", String(seq));
+        fd.append("size", String(chunk.size));
+        fd.append("file", chunk, name);
+        await api("/open-apis/drive/v1/files/upload_part", { body: fd });
+        onProgress((seq + 1) / prep.block_num);
+    }
+    const fin = await api("/open-apis/drive/v1/files/upload_finish", { json: { upload_id: prep.upload_id, block_num: prep.block_num } });
+    return fin.file_token;
+}
+async function findChat(name) {
+    const d = await api(`/open-apis/im/v1/chats/search?page_size=50&query=${encodeURIComponent(name)}`);
+    const chat = (d.items || []).find(c => c.name === name);
+    if (!chat) throw new Error(`Group "${name}" not found — are you a member?`);
+    return chat.chat_id;
+}
+async function postToGroup(groupName, title, files) {
+    const chatId = await findChat(groupName);
+    const content = { zh_cn: { title, content: files.map(f => [{ tag: "a", text: f.name, href: `${FEISHU.DOMAIN}/file/${f.token}` }]) } };
+    await api("/open-apis/im/v1/messages?receive_id_type=chat_id", {
+        json: { receive_id: chatId, msg_type: "post", content: JSON.stringify(content) }
+    });
+}
+// OAuth callback
+(async () => {
+    const q = new URLSearchParams(location.search), code = q.get("code");
+    setToken(getToken());
+    if (!code) return;
+    history.replaceState(null, "", redirectUri());
+    let s = null; try { s = sessionStorage.getItem("feishuState"); } catch {}
+    if (s && s !== q.get("state")) return alert("Feishu login failed (state mismatch).");
+    try { await tokenRequest({ grant_type: "authorization_code", code }); }
+    catch (e) { alert(e.message); }
+})();
 
 // Local date (not UTC)
 (() => {
@@ -520,22 +630,26 @@ async function exportOne(div) {
     if (exif) blob = await insertExif(blob, exif, dims);
     return { blob, downscaled: scale < 1 };
 }
-async function saveZip(zip, fname) {
+async function saveZip(zip, fname, out) {
     const content = await zip.generateAsync({ type: "blob", compression: "STORE" });
-    saveAs(content, fname);
+    out ? out.push({ blob: content, name: fname }) : saveAs(content, fname);
 }
-async function downloadImages() {
+async function downloadImages(mode) {
+    const feishu = mode === "feishu";
+    if (feishu) { try { await accessToken(); } catch (e) { return alert(e.message); } }
     const cards = [...dom.container.querySelectorAll(".image-card")].filter(d => state.originalImages.has(d));
     if (!cards.length) return alert("No images uploaded!");
-    const btn = dom.downloadBtn;
+    const btn = feishu ? dom.feishuPostBtn : dom.downloadBtn, btnLabel = btn.textContent;
+    const project = dom.projectPicker.value, zips = feishu ? [] : null;
     btn.disabled = true;
     btn.textContent = "Processing...";
-    const failed = [];
+    const failed = [], notes0 = [];
     let downscaled = 0;
     try {
         await logoReady;
         const dateStr = dom.datePicker.value ? dom.datePicker.value.replace(/-/g, "") : "nodate";
         const counters = {}, folders = {};
+        const zipBase = `${project} Drone Photo 无人机航拍图${dateStr}`;
         let zip = new JSZip(), partBytes = 0, part = 1;
         for (let i = 0; i < cards.length; i++) {
             const card = cards[i];
@@ -548,7 +662,7 @@ async function downloadImages() {
             const name = folders[key] || (folders[key] = raw);
             counters[key] = (counters[key] || 0) + 1;
             if (partBytes && partBytes + res.blob.size > PART_LIMIT) {
-                await saveZip(zip, `DroneOps_Batch_part${part}.zip`);
+                await saveZip(zip, `${zipBase}_part${part}.zip`, zips);
                 zip = new JSZip(); partBytes = 0; part++;
             }
             const seq = String(counters[key]).padStart(3, '0');
@@ -557,15 +671,28 @@ async function downloadImages() {
             dom.progressBar.style.width = `${((i + 1) / cards.length) * 90}%`;
             await new Promise(r => setTimeout(r, 0));
         }
-        if (partBytes) await saveZip(zip, part === 1 ? "DroneOps_Batch.zip" : `DroneOps_Batch_part${part}.zip`);
+        if (partBytes) await saveZip(zip, part === 1 ? `${zipBase}.zip` : `${zipBase}_part${part}.zip`, zips);
+        if (feishu && zips.length) {
+            const uploaded = [];
+            for (let z = 0; z < zips.length; z++) {
+                btn.textContent = `Uploading ${z + 1}/${zips.length}...`;
+                const token = await uploadToDrive(zips[z].blob, zips[z].name,
+                    f => { dom.progressBar.style.width = `${90 + ((z + f) / zips.length) * 10}%`; });
+                uploaded.push({ name: zips[z].name, token });
+            }
+            await postToGroup(FEISHU.GROUPS[project], zipBase, uploaded);
+            notes0.push(`Posted to "${FEISHU.GROUPS[project]}".`);
+        }
         dom.progressBar.style.width = "100%";
-        const notes = [];
+        const notes = notes0;
         if (failed.length) notes.push(`Failed (${failed.length}): ${failed.join(", ")}`);
         if (downscaled) notes.push(`${downscaled} photo(s) downscaled — browser canvas size limit.`);
         if (notes.length) alert(notes.join("\n"));
+    } catch (e) {
+        alert(`Error: ${e.message}`);
     } finally {
         btn.disabled = false;
-        btn.textContent = "Download All (ZIP)";
+        btn.textContent = btnLabel;
         setTimeout(() => { dom.progressBar.style.width = "0%"; }, 2000);
     }
 }
