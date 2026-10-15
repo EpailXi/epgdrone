@@ -187,7 +187,7 @@ const FEISHU = {
     DOMAIN: "https://twswzvv3ark.feishu.cn",
     FOLDER: "C0JKf5TzFlxGxZdblO6cH7bIn9b",                     // Drive folder token
     GROUPS: { KVTP: "吉隆坡KVTP-A ME项目", BTP: "BTP-A&B 项目管理" },
-    SCOPES: "drive:file:upload im:message.send_as_user im:chat:readonly offline_access"
+    SCOPES: "drive:drive im:message.send_as_user im:chat:readonly offline_access"
 };
 const TOKEN_KEY = "feishuToken";
 const redirectUri = () => location.origin + location.pathname;
@@ -226,7 +226,7 @@ async function accessToken() {
 async function api(path, opts = {}) {
     const headers = { Authorization: `Bearer ${await accessToken()}` };
     if (opts.json) { headers["Content-Type"] = "application/json; charset=utf-8"; opts.body = JSON.stringify(opts.json); }
-    const r = await (await fetch(FEISHU.WORKER + path, { method: opts.body ? "POST" : "GET", headers, body: opts.body })).json();
+    const r = await (await fetch(FEISHU.WORKER + path, { method: opts.method || (opts.body ? "POST" : "GET"), headers, body: opts.body })).json();
     if (r.code !== 0) throw new Error(`Feishu ${path.split("?")[0]}: ${r.msg} (${r.code})`);
     return r.data;
 }
@@ -260,8 +260,17 @@ async function findChat(name) {
     if (!chat) throw new Error(`Group "${name}" not found — are you a member?`);
     return chat.chat_id;
 }
-async function postToGroup(groupName, title, files) {
-    const chatId = await findChat(groupName);
+// Group members: view + download only (no edit)
+async function setViewOnly(token, chatId) {
+    await api(`/open-apis/drive/v1/permissions/${token}/members?type=file&need_notification=false`, {
+        json: { member_type: "openchat", member_id: chatId, perm: "view" }
+    });
+    await api(`/open-apis/drive/v1/permissions/${token}/public?type=file`, {
+        method: "PATCH",
+        json: { link_share_entity: "tenant_readable", security_entity: "anyone_can_view", share_entity: "only_full_access" }
+    });
+}
+async function postToGroup(chatId, title, files) {
     const content = { zh_cn: { title, content: files.map(f => [{ tag: "a", text: f.name, href: `${FEISHU.DOMAIN}/file/${f.token}` }]) } };
     await api("/open-apis/im/v1/messages?receive_id_type=chat_id", {
         json: { receive_id: chatId, msg_type: "post", content: JSON.stringify(content) }
@@ -673,14 +682,16 @@ async function downloadImages(mode) {
         }
         if (partBytes) await saveZip(zip, part === 1 ? `${zipBase}.zip` : `${zipBase}_part${part}.zip`, zips);
         if (feishu && zips.length) {
+            const chatId = await findChat(FEISHU.GROUPS[project]);
             const uploaded = [];
             for (let z = 0; z < zips.length; z++) {
                 btn.textContent = `Uploading ${z + 1}/${zips.length}...`;
                 const token = await uploadToDrive(zips[z].blob, zips[z].name,
                     f => { dom.progressBar.style.width = `${90 + ((z + f) / zips.length) * 10}%`; });
+                await setViewOnly(token, chatId);
                 uploaded.push({ name: zips[z].name, token });
             }
-            await postToGroup(FEISHU.GROUPS[project], zipBase, uploaded);
+            await postToGroup(chatId, zipBase, uploaded);
             notes0.push(`Posted to "${FEISHU.GROUPS[project]}".`);
         }
         dom.progressBar.style.width = "100%";

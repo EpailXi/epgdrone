@@ -3,7 +3,7 @@
 ## 1. Feishu app (open.feishu.cn → 开发者后台)
 1. Create **企业自建应用**; note **App ID** + **App Secret**.
 2. 安全设置 → 重定向URL: `https://epailxi.github.io/epgdrone/`
-3. 权限管理 → add **user** scopes: `drive:file:upload`, `im:message.send_as_user`, `im:chat:readonly`, `offline_access`.
+3. 权限管理 → add **user** scopes: `drive:drive`, `im:message.send_as_user`, `im:chat:readonly`, `offline_access`.
 4. Publish a version; admin approves.
 
 ## 2. Cloudflare Worker

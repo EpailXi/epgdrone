@@ -9,6 +9,7 @@ const ALLOW = new Set([
   "/open-apis/im/v1/chats/search",
   "/open-apis/im/v1/messages",
 ]);
+const ALLOW_RE = /^\/open-apis\/drive\/v1\/permissions\/[A-Za-z0-9]+\/(members|public)$/;
 
 export default {
   async fetch(req, env) {
@@ -17,7 +18,7 @@ export default {
     const cors = {
       "Access-Control-Allow-Origin": origins.includes(origin) ? origin : origins[0],
       "Access-Control-Allow-Headers": "Authorization, Content-Type",
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Methods": "GET, POST, PATCH, OPTIONS",
       "Vary": "Origin",
     };
     if (req.method === "OPTIONS") return new Response(null, { headers: cors });
@@ -34,7 +35,7 @@ export default {
       upstream = await fetch(`${API}/open-apis/authen/v2/oauth/token`, {
         method: "POST", headers: { "Content-Type": "application/json; charset=utf-8" }, body: JSON.stringify(body),
       });
-    } else if (ALLOW.has(url.pathname)) {
+    } else if (ALLOW.has(url.pathname) || ALLOW_RE.test(url.pathname)) {
       const headers = { Authorization: req.headers.get("Authorization") || "" };
       const ct = req.headers.get("Content-Type");
       if (ct) headers["Content-Type"] = ct;
