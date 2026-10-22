@@ -185,7 +185,6 @@ const FEISHU = {
     APP_ID: "cli_aa5a811b7bb89d2f",                                  // Feishu app ID
     WORKER: "https://epg-feishu.REPLACE_ME.workers.dev",       // Cloudflare Worker URL
     DOMAIN: "https://twswzvv3ark.feishu.cn",
-    FOLDER: "C0JKf5TzFlxGxZdblO6cH7bIn9b",                     // Drive folder token
     GROUPS: { KVTP: "吉隆坡KVTP-A ME项目", BTP: "BTP-A&B 项目管理" },
     SCOPES: "drive:drive im:message.send_as_user im:chat:readonly offline_access"
 };
@@ -230,59 +229,23 @@ async function api(path, opts = {}) {
     if (r.code !== 0) throw new Error(`Feishu ${path.split("?")[0]}: ${r.msg} (${r.code})`);
     return r.data;
 }
-async function uploadToDrive(blob, name, onProgress) {
-    const base = { file_name: name, parent_type: "explorer", parent_node: FEISHU.FOLDER, size: String(blob.size) };
-    if (blob.size <= 20 * 1024 * 1024) {
-        const fd = new FormData();
-        Object.entries(base).forEach(([k, v]) => fd.append(k, v));
-        fd.append("file", blob, name);
-        const d = await api("/open-apis/drive/v1/files/upload_all", { body: fd });
-        onProgress(1);
-        return d.file_token;
+// Bot sends one photo (original JPEG, <=10 MB) as an image message to the project group
+async function postImageToGroup(project, blob, name) {
+    const fd = new FormData();
+    fd.append("project", project);
+    fd.append("image", blob, name);
+    for (let attempt = 0; ; attempt++) {
+        try { return await api("/bot/image", { body: fd }); }
+        catch (e) {
+            if (attempt >= 2) throw e;
+            await new Promise(r => setTimeout(r, 1500 * (attempt + 1))); // rate limit / transient
+        }
     }
-    const prep = await api("/open-apis/drive/v1/files/upload_prepare", { json: { ...base, size: blob.size } });
-    for (let seq = 0; seq < prep.block_num; seq++) {
-        const chunk = blob.slice(seq * prep.block_size, (seq + 1) * prep.block_size);
-        const fd = new FormData();
-        fd.append("upload_id", prep.upload_id);
-        fd.append("seq", String(seq));
-        fd.append("size", String(chunk.size));
-        fd.append("file", chunk, name);
-        await api("/open-apis/drive/v1/files/upload_part", { body: fd });
-        onProgress((seq + 1) / prep.block_num);
-    }
-    const fin = await api("/open-apis/drive/v1/files/upload_finish", { json: { upload_id: prep.upload_id, block_num: prep.block_num } });
-    return fin.file_token;
 }
-async function findChat(name) {
-    const d = await api(`/open-apis/im/v1/chats/search?page_size=50&query=${encodeURIComponent(name)}`);
-    const chat = (d.items || []).find(c => c.name === name);
-    if (!chat) throw new Error(`Group "${name}" not found — are you a member?`);
-    return chat.chat_id;
-}
-// Group members: view + download only (no edit)
-async function setViewOnly(token, chatId) {
-    await api(`/open-apis/drive/v1/permissions/${token}/members?type=file&need_notification=false`, {
-        json: { member_type: "openchat", member_id: chatId, perm: "view" }
-    });
-    await api(`/open-apis/drive/v1/permissions/${token}/public?type=file`, {
-        method: "PATCH",
-        json: { link_share_entity: "tenant_readable", security_entity: "anyone_can_view", share_entity: "only_full_access" }
-    });
-}
-// Bot posts the message (falls back to posting as the user if the bot isn't in the group)
-async function postToGroup(project, chatId, title, files) {
-    const content = { zh_cn: { title, content: files.map(f => [{ tag: "a", text: f.name, href: `${FEISHU.DOMAIN}/file/${f.token}` }]) } };
-    try {
-        await api("/bot/post", { json: { project, content: JSON.stringify(content) } });
-        return "bot";
-    } catch (e) {
-        console.warn("Bot post failed, posting as user:", e.message);
-        await api("/open-apis/im/v1/messages?receive_id_type=chat_id", {
-            json: { receive_id: chatId, msg_type: "post", content: JSON.stringify(content) }
-        });
-        return "user";
-    }
+// Bot posts a title line before the photos
+async function postTitle(project, title, count) {
+    const content = { zh_cn: { title, content: [[{ tag: "text", text: `现场原图 ${count} 张` }]] } };
+    await api("/bot/post", { json: { project, content: JSON.stringify(content) } });
 }
 // OAuth callback
 (async () => {
@@ -650,9 +613,8 @@ async function exportOne(div) {
     if (exif) blob = await insertExif(blob, exif, dims);
     return { blob, downscaled: scale < 1 };
 }
-async function saveZip(zip, fname, out) {
-    const content = await zip.generateAsync({ type: "blob", compression: "STORE" });
-    out ? out.push({ blob: content, name: fname }) : saveAs(content, fname);
+async function saveZip(zip, fname) {
+    saveAs(await zip.generateAsync({ type: "blob", compression: "STORE" }), fname);
 }
 async function downloadImages(mode) {
     const feishu = mode === "feishu";
@@ -660,7 +622,7 @@ async function downloadImages(mode) {
     const cards = [...dom.container.querySelectorAll(".image-card")].filter(d => state.originalImages.has(d));
     if (!cards.length) return alert("No images uploaded!");
     const btn = feishu ? dom.feishuPostBtn : dom.downloadBtn, btnLabel = btn.textContent;
-    const project = dom.projectPicker.value, zips = feishu ? [] : null;
+    const project = dom.projectPicker.value, useZip = !feishu;
     btn.disabled = true;
     btn.textContent = "Processing...";
     const failed = [], notes0 = [];
@@ -670,7 +632,8 @@ async function downloadImages(mode) {
         const dateStr = dom.datePicker.value ? dom.datePicker.value.replace(/-/g, "") : "nodate";
         const counters = {}, folders = {};
         const zipBase = `${project} Drone Photo 无人机航拍图${dateStr}`;
-        let zip = new JSZip(), partBytes = 0, part = 1;
+        let zip = useZip ? new JSZip() : null, partBytes = 0, part = 1, sent = 0;
+        if (feishu) await postTitle(project, zipBase, cards.length);
         for (let i = 0; i < cards.length; i++) {
             const card = cards[i];
             let res;
@@ -681,30 +644,27 @@ async function downloadImages(mode) {
             const key = raw.toLowerCase();          // case-insensitive (Windows-safe)
             const name = folders[key] || (folders[key] = raw);
             counters[key] = (counters[key] || 0) + 1;
-            if (partBytes && partBytes + res.blob.size > PART_LIMIT) {
-                await saveZip(zip, `${zipBase}_part${part}.zip`, zips);
-                zip = new JSZip(); partBytes = 0; part++;
-            }
             const seq = String(counters[key]).padStart(3, '0');
-            zip.file(`Processed/${name}/${name}_${dateStr}_${seq}.jpg`, res.blob);
-            partBytes += res.blob.size;
+            const fileName = `${name}_${dateStr}_${seq}.jpg`;
+            if (feishu) {
+                // Original photos, one by one — no ZIP
+                btn.textContent = `Sending ${i + 1}/${cards.length}...`;
+                try { await postImageToGroup(project, res.blob, fileName); sent++; }
+                catch (e) { failed.push(`${state.originalImages.get(card).name} (${e.message})`); }
+                await new Promise(r => setTimeout(r, 400));
+            } else {
+                if (partBytes && partBytes + res.blob.size > PART_LIMIT) {
+                    await saveZip(zip, `${zipBase}_part${part}.zip`);
+                    zip = new JSZip(); partBytes = 0; part++;
+                }
+                zip.file(fileName, res.blob); // flat: no per-project folders
+                partBytes += res.blob.size;
+            }
             dom.progressBar.style.width = `${((i + 1) / cards.length) * 90}%`;
             await new Promise(r => setTimeout(r, 0));
         }
-        if (partBytes) await saveZip(zip, part === 1 ? `${zipBase}.zip` : `${zipBase}_part${part}.zip`, zips);
-        if (feishu && zips.length) {
-            const chatId = await findChat(FEISHU.GROUPS[project]);
-            const uploaded = [];
-            for (let z = 0; z < zips.length; z++) {
-                btn.textContent = `Uploading ${z + 1}/${zips.length}...`;
-                const token = await uploadToDrive(zips[z].blob, zips[z].name,
-                    f => { dom.progressBar.style.width = `${90 + ((z + f) / zips.length) * 10}%`; });
-                await setViewOnly(token, chatId);
-                uploaded.push({ name: zips[z].name, token });
-            }
-            const by = await postToGroup(project, chatId, zipBase, uploaded);
-            notes0.push(`Posted to "${FEISHU.GROUPS[project]}"${by === "user" ? " (as you — add the bot to this group to post as bot)" : " by bot"}.`);
-        }
+        if (useZip && partBytes) await saveZip(zip, part === 1 ? `${zipBase}.zip` : `${zipBase}_part${part}.zip`);
+        if (feishu) notes0.push(`Sent ${sent}/${cards.length} photo(s) to "${FEISHU.GROUPS[project]}".`);
         dom.progressBar.style.width = "100%";
         const notes = notes0;
         if (failed.length) notes.push(`Failed (${failed.length}): ${failed.join(", ")}`);

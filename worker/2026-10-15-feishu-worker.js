@@ -38,20 +38,23 @@ export default {
       upstream = await fetch(`${API}/open-apis/authen/v2/oauth/token`, {
         method: "POST", headers: { "Content-Type": "application/json; charset=utf-8" }, body: JSON.stringify(body),
       });
-    } else if (url.pathname === "/bot/post" && req.method === "POST") {
+    } else if ((url.pathname === "/bot/post" || url.pathname === "/bot/image") && req.method === "POST") {
       // Caller must be a logged-in user of this app
       const me = await (await fetch(`${API}/open-apis/authen/v1/user_info`, {
         headers: { Authorization: req.headers.get("Authorization") || "" },
       })).json();
       if (me.code !== 0) return json({ code: 401, msg: "Not logged in" }, cors);
-      const { project, content } = await req.json();
-      const name = GROUPS[project];
+      const isImage = url.pathname === "/bot/image";
+      const form = isImage ? await req.formData() : null;
+      const body = isImage ? null : await req.json();
+      const name = GROUPS[isImage ? form.get("project") : body.project];
       if (!name) return json({ code: 400, msg: "Unknown project" }, cors);
       const t = await (await fetch(`${API}/open-apis/auth/v3/tenant_access_token/internal`, {
         method: "POST", headers: { "Content-Type": "application/json; charset=utf-8" },
         body: JSON.stringify({ app_id: env.APP_ID, app_secret: env.APP_SECRET }),
       })).json();
-      const bot = { Authorization: `Bearer ${t.tenant_access_token}`, "Content-Type": "application/json; charset=utf-8" };
+      const auth = { Authorization: `Bearer ${t.tenant_access_token}` };
+      const bot = { ...auth, "Content-Type": "application/json; charset=utf-8" };
       let chatId = null, pageToken = "";
       do {
         const r = await (await fetch(`${API}/open-apis/im/v1/chats?page_size=100${pageToken ? "&page_token=" + pageToken : ""}`, { headers: bot })).json();
@@ -60,8 +63,19 @@ export default {
         pageToken = r.data.has_more ? r.data.page_token : "";
       } while (!chatId && pageToken);
       if (!chatId) return json({ code: 404, msg: `Bot is not in group "${name}"` }, cors);
+      let msgType = "post", content = body?.content;
+      if (isImage) {
+        // Original photo as an image message (Feishu limit: 10 MB per image)
+        const up = new FormData();
+        up.append("image_type", "message");
+        up.append("image", form.get("image"));
+        const img = await (await fetch(`${API}/open-apis/im/v1/images`, { method: "POST", headers: auth, body: up })).json();
+        if (img.code !== 0) return json(img, cors);
+        msgType = "image";
+        content = JSON.stringify({ image_key: img.data.image_key });
+      }
       upstream = await fetch(`${API}/open-apis/im/v1/messages?receive_id_type=chat_id`, {
-        method: "POST", headers: bot, body: JSON.stringify({ receive_id: chatId, msg_type: "post", content }),
+        method: "POST", headers: bot, body: JSON.stringify({ receive_id: chatId, msg_type: msgType, content }),
       });
     } else if (ALLOW.has(url.pathname) || ALLOW_RE.test(url.pathname)) {
       const headers = { Authorization: req.headers.get("Authorization") || "" };

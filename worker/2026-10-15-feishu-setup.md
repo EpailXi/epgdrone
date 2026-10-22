@@ -5,7 +5,7 @@
 2. 安全设置 → 重定向URL: `https://epailxi.github.io/epgdrone/`
 3. 权限管理 → add **user** scopes: `drive:drive`, `im:message.send_as_user`, `im:chat:readonly`, `offline_access`.
 4. Add features: **Bot** + **Web app** (homepage `https://epailxi.github.io/epgdrone/`).
-5. Tenant scopes: `im:message:send_as_bot`, `im:chat:readonly`.
+5. Tenant scopes: `im:message:send_as_bot`, `im:chat:readonly`, `im:resource` (upload photos as image messages).
 6. Publish a version; admin approves.
 7. Add the bot to both groups (group → Settings → Bots → Add Bot → EPG Drone Photo Poster).
 
