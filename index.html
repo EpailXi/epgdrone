@@ -126,6 +126,7 @@ canvas { max-width: 100%; height: auto; border-radius: 4px; box-shadow: 0 0 5px 
     <input type="file" id="folderUpload" webkitdirectory multiple class="hidden">
     <button class="secondary" onclick="clearAll()">Clear All</button>
     <button id="downloadBtn" onclick="downloadImages()">Download All (ZIP)</button>
+    <button id="downloadFoldersBtn" onclick="downloadImages('folders')">Download by Folder (ZIP)</button>
 </div>
 <div class="control-group">
     <select id="projectPicker" aria-label="Project">
@@ -175,6 +176,7 @@ const dom = {
     datePicker: document.getElementById('datePicker'),
     progressBar: document.getElementById('progressBar'),
     downloadBtn: document.getElementById('downloadBtn'),
+    downloadFoldersBtn: document.getElementById('downloadFoldersBtn'),
     projectPicker: document.getElementById('projectPicker'),
     feishuLoginBtn: document.getElementById('feishuLoginBtn'),
     feishuPostBtn: document.getElementById('feishuPostBtn')
@@ -621,7 +623,8 @@ async function downloadImages(mode) {
     if (feishu) { try { await accessToken(); } catch (e) { return alert(e.message); } }
     const cards = [...dom.container.querySelectorAll(".image-card")].filter(d => state.originalImages.has(d));
     if (!cards.length) return alert("No images uploaded!");
-    const btn = feishu ? dom.feishuPostBtn : dom.downloadBtn, btnLabel = btn.textContent;
+    const byFolder = mode === "folders";
+    const btn = feishu ? dom.feishuPostBtn : byFolder ? dom.downloadFoldersBtn : dom.downloadBtn, btnLabel = btn.textContent;
     const project = dom.projectPicker.value, useZip = !feishu;
     btn.disabled = true;
     btn.textContent = "Processing...";
@@ -657,7 +660,8 @@ async function downloadImages(mode) {
                     await saveZip(zip, `${zipBase}_part${part}.zip`);
                     zip = new JSZip(); partBytes = 0; part++;
                 }
-                zip.file(fileName, res.blob); // flat: no per-project folders
+                // "Download by Folder": one sub-folder per photo name; "Download All": flat
+                zip.file(byFolder ? `${name}/${fileName}` : fileName, res.blob);
                 partBytes += res.blob.size;
             }
             dom.progressBar.style.width = `${((i + 1) / cards.length) * 90}%`;
