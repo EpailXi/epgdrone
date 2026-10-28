@@ -93,6 +93,14 @@ button.secondary:hover { background-color: #555; }
 #selBar { flex-basis: 100%; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: center; }
 #selBar.hidden { display: none; }
 #selCount { font-weight: bold; color: #fff; }
+.ai-tag { font-size: 0.8rem; color: #7ee787; margin-top: 4px; min-height: 1em; }
+.ai-tag.unsure { color: #e3b341; }
+.ai-panel { position: fixed; top: 170px; right: 20px; z-index: 300; width: min(420px, calc(100vw - 32px)); max-height: 70vh; overflow: auto;
+    background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 16px; box-shadow: 0 6px 20px rgba(0,0,0,0.6); }
+.ai-panel.hidden { display: none; }
+.ai-panel h3 { margin: 0 0 8px; }
+.ai-panel ul { padding-left: 18px; margin: 8px 0; }
+.ai-panel .note { font-size: 0.8rem; color: #aaa; margin: 6px 0; }
 canvas { max-width: 100%; height: auto; border-radius: 4px; box-shadow: 0 0 5px rgba(0,0,0,0.5); }
 .progress-container {
     position: fixed;
@@ -135,6 +143,7 @@ canvas { max-width: 100%; height: auto; border-radius: 4px; box-shadow: 0 0 5px 
     </select>
     <button class="secondary" id="feishuLoginBtn" onclick="feishuLogin()">Login with Feishu</button>
     <button id="feishuPostBtn" onclick="downloadImages('feishu')">Post to Feishu</button>
+    <button class="secondary" id="aiBtn" onclick="aiPanel()">AI</button>
 </div>
 <div id="selBar" class="hidden">
     <span id="selCount"></span>
@@ -145,6 +154,21 @@ canvas { max-width: 100%; height: auto; border-radius: 4px; box-shadow: 0 0 5px 
     <button class="secondary" onclick="clearSelection()">Clear Selection</button>
 </div>
 </header>
+<div id="aiPanel" class="ai-panel hidden">
+    <h3>AI block auto-fill</h3>
+    <label><input type="checkbox" id="aiEnabled" onchange="aiToggle(this.checked)"> Auto-fill names for new photos</label>
+    <p class="note">Learns from photos you name, every time you Download or Post. New photos get the name of the closest learned spot (GPS, height, camera direction and the picture itself). Green = confident, yellow = check it. Typing a name always wins.</p>
+    <ul id="aiStats"></ul>
+    <p class="note" id="aiShared"></p>
+    <div class="control-group">
+        <button onclick="aiFillAll()">Auto-fill loaded photos</button>
+        <button class="secondary" onclick="aiExport()">Export</button>
+        <button class="secondary" onclick="aiImport()">Import</button>
+        <button class="secondary" onclick="aiReset()">Reset</button>
+        <button class="secondary" onclick="aiPanel(false)">Close</button>
+    </div>
+    <input type="file" id="aiImportFile" accept=".json,application/json" class="hidden">
+</div>
 <div class="upload-zone" id="dropZone" onclick="document.getElementById('imageUpload').click()">
 <h3>Click or Drag Drone Photos / Folders Here</h3>
 <p style="color: #888">Each upload = new batch with its own project name. Folders: each subfolder = one batch.<br>Mixed projects? Click photos to select (Shift+click = range), name them, then Move to New Batch.</p>
@@ -356,6 +380,7 @@ function createBatch(name) {
     const nameInput = batch.querySelector(".batch-name");
     nameInput.value = name || "";
     nameInput.oninput = () => {
+        batch._typed = true;
         clearTimeout(nameInput._t);
         nameInput._t = setTimeout(() => batch.querySelectorAll(".image-card").forEach(processImage), 300);
     };
@@ -375,11 +400,11 @@ function handleFiles(files, defaultName) {
     imgs.forEach(file => {
         const div = document.createElement("div");
         div.className = "image-card";
-        div.innerHTML = `<canvas></canvas><div class="fname"></div>
+        div.innerHTML = `<canvas></canvas><div class="fname"></div><div class="ai-tag"></div>
             <input type="text" class="img-name" aria-label="Photo name override" placeholder="Override name (optional)">`;
         div.querySelector(".fname").textContent = file.name;
         const inp = div.querySelector(".img-name");
-        inp.oninput = () => { clearTimeout(inp._t); inp._t = setTimeout(() => processImage(div), 300); };
+        inp.oninput = () => { delete div.dataset.auto; setAiTag(div, ""); clearTimeout(inp._t); inp._t = setTimeout(() => processImage(div), 300); };
         grid.appendChild(div);
         state.originalImages.set(div, file);
         previewQueue = previewQueue.then(() => buildPreview(div));
@@ -425,10 +450,14 @@ function moveSelectedToBatch() {
     const name = selName.value.trim();
     if (!name && !confirm("No project name entered. Move anyway (uses header default)?")) return;
     const oldBatches = new Set(sel.map(c => c.closest(".batch")));
-    const grid = createBatch(name).querySelector(".batch-grid");
+    const newBatch = createBatch(name);
+    newBatch._typed = !!name;
+    const grid = newBatch.querySelector(".batch-grid");
     sel.forEach(c => {
         c.classList.remove("selected");
         c.querySelector(".img-name").value = "";
+        delete c.dataset.auto;
+        setAiTag(c, "");
         grid.appendChild(c);
         processImage(c);
     });
@@ -443,7 +472,7 @@ function nameSelected() {
     const name = selName.value.trim();
     if (!sel.length) return;
     if (!name) return alert("Enter a project name first.");
-    sel.forEach(c => { c.querySelector(".img-name").value = name; processImage(c); });
+    sel.forEach(c => { c.querySelector(".img-name").value = name; delete c.dataset.auto; setAiTag(c, ""); processImage(c); });
     clearSelection();
     selName.value = "";
 }
@@ -513,6 +542,8 @@ async function buildPreview(div) {
         img.src = "";
         div._base = c;
         processImage(div);
+        div._meta = await photoMeta(file).catch(() => ({}));
+        aiSuggest(div);
     } catch {
         div.querySelector(".fname").textContent += " (failed to load)";
     }
@@ -528,6 +559,269 @@ function processImage(div) {
     ctx.drawImage(base, 0, 0);
     drawOverlay(ctx, base.width, base.height, labelFor(div));
 }
+
+// ---------- AI block auto-fill (learns from photos you name) ----------
+// Drone photos carry GPS + height + camera direction. Every named photo you
+// download/post becomes a training example; new photos get the name of the
+// nearest learned spot. An in-browser image model (MobileNet) covers photos
+// without GPS and helps when two blocks are close together.
+const AI_KEY = "droneAI.v1";
+const AI = { samples: [], enabled: true, modelP: null, shared: "" };
+const fpCache = new WeakMap();
+(() => {
+    try {
+        const d = JSON.parse(localStorage.getItem(AI_KEY));
+        if (d) { AI.samples = d.samples || []; AI.enabled = d.enabled !== false; }
+    } catch {}
+})();
+function aiPrune(list) {
+    const per = {};
+    return list.sort((a, b) => (b.t || 0) - (a.t || 0))
+        .filter(s => (per[s.n] = (per[s.n] || 0) + 1) <= 60).slice(0, 3000);
+}
+function aiSave() {
+    const write = () => localStorage.setItem(AI_KEY, JSON.stringify({ samples: AI.samples, enabled: AI.enabled }));
+    try { write(); }
+    catch { // storage full: drop image fingerprints of the older half
+        AI.samples.slice(Math.floor(AI.samples.length / 2)).forEach(s => delete s.e);
+        try { write(); } catch {}
+    }
+    aiRender();
+}
+function aiMerge(incoming) {
+    const byId = new Map(AI.samples.map(s => [s.id, s]));
+    let added = 0;
+    (incoming || []).forEach(s => {
+        if (!s || !s.id || typeof s.n !== "string" || !s.n) return;
+        if (!byId.has(s.id)) added++;
+        byId.set(s.id, s);
+    });
+    AI.samples = aiPrune([...byId.values()]);
+    return added;
+}
+
+// GPS (EXIF) + DJI height / camera direction (XMP)
+async function photoMeta(file) {
+    const m = {};
+    const exif = await loadExif(file);
+    const g = exif && exif.GPS, G = typeof piexif !== "undefined" ? piexif.GPSIFD : null;
+    if (g && G && g[G.GPSLatitude] && g[G.GPSLongitude]) {
+        const r = v => v[0] / v[1], dms = a => r(a[0]) + r(a[1]) / 60 + r(a[2]) / 3600;
+        m.lat = dms(g[G.GPSLatitude]) * (g[G.GPSLatitudeRef] === "S" ? -1 : 1);
+        m.lon = dms(g[G.GPSLongitude]) * (g[G.GPSLongitudeRef] === "W" ? -1 : 1);
+        if (g[G.GPSAltitude]) m.alt = r(g[G.GPSAltitude]);
+    }
+    if (!isFinite(m.lat) || !isFinite(m.lon) || (m.lat === 0 && m.lon === 0)) { delete m.lat; delete m.lon; }
+    try {
+        const x = await file.slice(0, 262144).text();
+        const num = k => {
+            const mm = x.match(new RegExp(`drone-dji:${k}(?:="|>)\\s*([+-]?[\\d.]+)`));
+            return mm ? parseFloat(mm[1]) : undefined;
+        };
+        const rel = num("RelativeAltitude"); if (isFinite(rel)) m.alt = rel;
+        const yaw = num("GimbalYawDegree") ?? num("FlightYawDegree"); if (isFinite(yaw)) m.yaw = yaw;
+    } catch {}
+    if (!isFinite(m.alt)) delete m.alt;
+    return m;
+}
+const photoKey = f => `${f.name}|${f.size}|${f.lastModified}`;
+
+// Image fingerprint (MobileNet embedding, loaded on first use)
+function loadScript(src) {
+    return new Promise((res, rej) => {
+        const s = document.createElement("script");
+        s.src = src; s.onload = res; s.onerror = () => rej(new Error(`Failed to load ${src}`));
+        document.head.appendChild(s);
+    });
+}
+function aiModel() {
+    if (!AI.modelP) AI.modelP = (async () => {
+        if (typeof tf === "undefined") await loadScript("https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js");
+        if (typeof mobilenet === "undefined") await loadScript("https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js");
+        return await mobilenet.load({ version: 2, alpha: 0.5 });
+    })().catch(e => { console.warn("AI image model unavailable:", e); return null; });
+    return AI.modelP;
+}
+async function fingerprint(div) {
+    if (div._fp) return div._fp;
+    if (!div._base) return null;
+    const model = await aiModel();
+    if (!model) return null;
+    const t = model.infer(div._base, true);
+    const v = t.dataSync();
+    t.dispose();
+    let max = 0;
+    for (const x of v) max = Math.max(max, Math.abs(x));
+    const q = new Int8Array(v.length);
+    for (let i = 0; i < v.length; i++) q[i] = Math.round(v[i] / (max || 1) * 127);
+    return (div._fp = q);
+}
+const fpEncode = q => { let s = ""; new Uint8Array(q.buffer).forEach(b => { s += String.fromCharCode(b); }); return btoa(s); };
+function fpDecode(sample) {
+    let v = fpCache.get(sample);
+    if (!v) { v = new Int8Array(Uint8Array.from(atob(sample.e), c => c.charCodeAt(0)).buffer); fpCache.set(sample, v); }
+    return v;
+}
+function cosine(a, b) {
+    if (a.length !== b.length) return 0;
+    let d = 0, na = 0, nb = 0;
+    for (let i = 0; i < a.length; i++) { d += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
+    return na && nb ? d / Math.sqrt(na * nb) : 0;
+}
+
+// Prediction: nearest learned spots (position, height, camera direction, look)
+function haversine(a, b) {
+    const R = 6371000, rad = Math.PI / 180;
+    const h = Math.sin((b.lat - a.lat) * rad / 2) ** 2
+        + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin((b.lon - a.lon) * rad / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(h));
+}
+function aiDistance(q, s, qv) {
+    let d = 0, n = 0;
+    if (q.lat !== undefined && s.lat !== undefined) {
+        let m = haversine(q, s);
+        if (q.alt !== undefined && s.alt !== undefined) m = Math.hypot(m, (q.alt - s.alt) * 0.5);
+        if (q.yaw !== undefined && s.yaw !== undefined) m += Math.abs(((q.yaw - s.yaw) % 360 + 540) % 360 - 180) * 0.4;
+        d += m / 25; n++;   // 25 m ≈ 1 unit
+    }
+    if (qv && s.e) { d += (1 - cosine(qv, fpDecode(s))) / 0.15; n++; }
+    return n ? d / n : Infinity;
+}
+function aiPredict(q, qv, project) {
+    let pool = AI.samples.filter(s => s.p === project);
+    if (!pool.length) pool = AI.samples;
+    const near = pool.map(s => ({ n: s.n, d: aiDistance(q, s, qv) }))
+        .filter(x => isFinite(x.d)).sort((a, b) => a.d - b.d).slice(0, 7);
+    if (!near.length || near[0].d > 8) return null;   // nothing learned near this spot
+    const w = {};
+    let tot = 0;
+    near.forEach(x => { const k = 1 / (0.2 + x.d) ** 2; w[x.n] = (w[x.n] || 0) + k; tot += k; });
+    const [name, wt] = Object.entries(w).sort((a, b) => b[1] - a[1])[0];
+    return { name, conf: wt / tot };
+}
+function setAiTag(div, text, unsure) {
+    const tag = div.querySelector(".ai-tag");
+    if (!tag) return;
+    tag.textContent = text || "";
+    tag.classList.toggle("unsure", !!unsure);
+}
+let aiQueue = Promise.resolve();
+function aiSuggest(div, force) {
+    aiQueue = aiQueue.then(async () => {
+        if (!AI.enabled || !AI.samples.length || !div.isConnected) return;
+        const inp = div.querySelector(".img-name");
+        const batch = div.closest(".batch");
+        if (!force && (inp.value.trim() || (batch && batch._typed))) return;
+        if (force && inp.value.trim() && !div.dataset.auto) return;   // never replace a name you typed
+        const q = div._meta || {}, project = dom.projectPicker.value;
+        let r = q.lat !== undefined ? aiPredict(q, null, project) : null;
+        if ((!r || r.conf < 0.75) && AI.samples.some(s => s.e)) {
+            const qv = await fingerprint(div).catch(() => null);
+            if (qv) r = aiPredict(q, qv, project) || r;
+        }
+        if (!r || r.conf < 0.5 || !div.isConnected) return;
+        if (inp.value.trim() && !div.dataset.auto) return;
+        inp.value = r.name;
+        div.dataset.auto = r.name;
+        setAiTag(div, `AI: ${r.name} (${Math.round(r.conf * 100)}%)`, r.conf < 0.75);
+        processImage(div);
+    }).catch(e => console.warn("AI suggest failed:", e));
+}
+function aiFillAll() { allCards().forEach(c => aiSuggest(c, true)); aiPanel(false); }
+
+// Learning: called after a successful Download / Post
+function aiLearn(cards, project) {
+    const items = cards.map(c => ({ c, n: getName(c), f: state.originalImages.get(c) }))
+        .filter(x => x.f && x.n && x.n !== "Project");
+    if (!items.length) return;
+    aiQueue = aiQueue.then(async () => {
+        const fresh = [];
+        for (const { c, n, f } of items) {
+            const s = { id: photoKey(f), n, p: project, t: Date.now(), ...(c._meta || {}) };
+            const v = await fingerprint(c).catch(() => null);
+            if (v) s.e = fpEncode(v);
+            if (s.lat === undefined && !s.e) continue;
+            fresh.push(s);
+        }
+        if (!fresh.length) return;
+        aiMerge(fresh);
+        aiSave();
+        aiPush(fresh);
+    }).catch(e => console.warn("AI learn failed:", e));
+}
+
+// Shared training (Feishu login + Worker KV); falls back to this device only
+const sharedReady = () => !!getToken() && !FEISHU.WORKER.includes("REPLACE_ME");
+async function aiPull() {
+    if (!sharedReady()) return;
+    try {
+        const d = await api("/train");
+        const added = aiMerge(d.samples);
+        AI.shared = `Shared: synced (${d.samples.length})`;
+        if (added) aiSave(); else aiRender();
+    } catch (e) { AI.shared = `Shared: off (${e.message})`; aiRender(); }
+}
+async function aiPush(samples) {
+    if (!sharedReady()) return;
+    try {
+        for (let i = 0; i < samples.length; i += 100) await api("/train", { json: { samples: samples.slice(i, i + 100) } });
+        AI.shared = "Shared: synced";
+    } catch (e) { AI.shared = `Shared: off (${e.message})`; }
+    aiRender();
+}
+
+// Panel
+function aiPanel(show) {
+    const p = document.getElementById("aiPanel");
+    p.classList.toggle("hidden", show === false || (show === undefined && !p.classList.contains("hidden")));
+    aiRender();
+}
+function aiRender() {
+    const labels = {};
+    AI.samples.forEach(s => {
+        const l = labels[s.n] || (labels[s.n] = { n: 0, gps: 0, img: 0 });
+        l.n++; if (s.lat !== undefined) l.gps++; if (s.e) l.img++;
+    });
+    const names = Object.keys(labels).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    document.getElementById("aiBtn").textContent = names.length ? `AI: ${names.length} block(s) learned` : "AI: not trained yet";
+    document.getElementById("aiEnabled").checked = AI.enabled;
+    const list = document.getElementById("aiStats");
+    list.textContent = "";
+    if (!names.length) list.textContent = "Nothing learned yet. Name your photos and Download or Post — each named photo is a training example. About 5–10 photos per block is enough.";
+    names.forEach(n => {
+        const li = document.createElement("li");
+        const l = labels[n];
+        li.textContent = `${n} — ${l.n} photo(s)${l.n < 5 ? " · needs more" : ""}`;
+        list.appendChild(li);
+    });
+    document.getElementById("aiShared").textContent = AI.shared
+        || (sharedReady() ? "Shared: connecting…" : "Saved on this device only (login with Feishu to share)");
+}
+function aiToggle(on) { AI.enabled = on; aiSave(); }
+function aiExport() {
+    const blob = new Blob([JSON.stringify({ samples: AI.samples })], { type: "application/json" });
+    saveAs(blob, `${new Date().toLocaleDateString("en-CA")}-drone-ai-training.json`);
+}
+function aiImport() { document.getElementById("aiImportFile").click(); }
+document.getElementById("aiImportFile").addEventListener("change", async e => {
+    const f = e.target.files[0];
+    e.target.value = "";
+    if (!f) return;
+    try {
+        const d = JSON.parse(await f.text());
+        const added = aiMerge(d.samples);
+        aiSave();
+        aiPush(d.samples || []);
+        alert(`Imported ${added} new training photo(s).`);
+    } catch { alert("Not a valid training file."); }
+});
+function aiReset() {
+    if (!confirm("Forget everything the AI learned on this device? (Shared training is kept.)")) return;
+    AI.samples = [];
+    aiSave();
+}
+aiRender();
+aiPull();
 
 // ---------- Export ----------
 const exportCanvas = document.createElement("canvas");
@@ -628,7 +922,7 @@ async function downloadImages(mode) {
     const project = dom.projectPicker.value, useZip = !feishu;
     btn.disabled = true;
     btn.textContent = "Processing...";
-    const failed = [], notes0 = [];
+    const failed = [], notes0 = [], done = [];
     let downscaled = 0;
     try {
         await logoReady;
@@ -652,7 +946,7 @@ async function downloadImages(mode) {
             if (feishu) {
                 // Original photos, one by one — no ZIP
                 btn.textContent = `Sending ${i + 1}/${cards.length}...`;
-                try { await postImageToGroup(project, res.blob, fileName); sent++; }
+                try { await postImageToGroup(project, res.blob, fileName); sent++; done.push(card); }
                 catch (e) { failed.push(`${state.originalImages.get(card).name} (${e.message})`); }
                 await new Promise(r => setTimeout(r, 400));
             } else {
@@ -662,6 +956,7 @@ async function downloadImages(mode) {
                 }
                 // "Download by Folder": one sub-folder per photo name; "Download All": flat
                 zip.file(byFolder ? `${name}/${fileName}` : fileName, res.blob);
+                done.push(card);
                 partBytes += res.blob.size;
             }
             dom.progressBar.style.width = `${((i + 1) / cards.length) * 90}%`;
@@ -670,6 +965,7 @@ async function downloadImages(mode) {
         if (useZip && partBytes) await saveZip(zip, part === 1 ? `${zipBase}.zip` : `${zipBase}_part${part}.zip`);
         if (feishu) notes0.push(`Sent ${sent}/${cards.length} photo(s) to "${FEISHU.GROUPS[project]}".`);
         dom.progressBar.style.width = "100%";
+        aiLearn(done, project); // every named photo teaches the AI
         const notes = notes0;
         if (failed.length) notes.push(`Failed (${failed.length}): ${failed.join(", ")}`);
         if (downscaled) notes.push(`${downscaled} photo(s) downscaled — browser canvas size limit.`);

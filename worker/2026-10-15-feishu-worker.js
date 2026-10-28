@@ -1,5 +1,6 @@
 // Cloudflare Worker: Feishu OAuth token exchange + CORS proxy for DroneOps.
 // Secrets/vars: APP_ID, APP_SECRET, REDIRECT_URI, ALLOWED_ORIGIN (comma-separated).
+// Optional KV binding TRAIN: shared AI training set for block auto-fill (/train).
 const API = "https://open.feishu.cn";
 const ALLOW = new Set([
   "/open-apis/drive/v1/files/upload_all",
@@ -77,6 +78,29 @@ export default {
       upstream = await fetch(`${API}/open-apis/im/v1/messages?receive_id_type=chat_id`, {
         method: "POST", headers: bot, body: JSON.stringify({ receive_id: chatId, msg_type: msgType, content }),
       });
+    } else if (url.pathname === "/train") {
+      // Shared AI training set (block auto-fill). Needs a KV namespace bound as TRAIN.
+      if (!env.TRAIN) return json({ code: 501, msg: "Shared training not set up (bind KV as TRAIN)" }, cors);
+      const me = await (await fetch(`${API}/open-apis/authen/v1/user_info`, {
+        headers: { Authorization: req.headers.get("Authorization") || "" },
+      })).json();
+      if (me.code !== 0) return json({ code: 401, msg: "Not logged in" }, cors);
+      const stored = JSON.parse((await env.TRAIN.get("samples")) || "[]");
+      if (req.method === "GET") return json({ code: 0, data: { samples: stored } }, cors);
+      if (req.method !== "POST") return new Response("Method not allowed", { status: 405, headers: cors });
+      const b = await req.json();
+      let samples = stored;
+      if (Array.isArray(b.samples)) {
+        const seen = new Set(samples.map(s => s.id));
+        for (const s of b.samples.slice(0, 500)) {
+          if (s && typeof s.n === "string" && s.n.length <= 80 && s.id && !seen.has(s.id)) { samples.push(s); seen.add(s.id); }
+        }
+      }
+      // keep the newest 60 per label, 3000 overall
+      const per = {};
+      samples = samples.sort((x, y) => (y.t || 0) - (x.t || 0)).filter(s => (per[s.n] = (per[s.n] || 0) + 1) <= 60).slice(0, 3000);
+      await env.TRAIN.put("samples", JSON.stringify(samples));
+      return json({ code: 0, data: { count: samples.length } }, cors);
     } else if (ALLOW.has(url.pathname) || ALLOW_RE.test(url.pathname)) {
       const headers = { Authorization: req.headers.get("Authorization") || "" };
       const ct = req.headers.get("Content-Type");

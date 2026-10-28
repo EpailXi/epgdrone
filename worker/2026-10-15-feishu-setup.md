@@ -16,6 +16,7 @@
    - `APP_SECRET` = App Secret (**Secret** type)
    - `REDIRECT_URI` = `https://epailxi.github.io/epgdrone/`
    - `ALLOWED_ORIGIN` = `https://epailxi.github.io`
+3. (Optional, shared AI training) Workers → KV → Create namespace `epg-drone-ai` → Worker Settings → Bindings → KV namespace, variable name `TRAIN`. Without it the AI learns per device only.
 
 ## 3. index.html
 Set `FEISHU.APP_ID` and `FEISHU.WORKER` (Worker URL).
