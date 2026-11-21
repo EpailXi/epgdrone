@@ -824,8 +824,9 @@ aiRender();
 aiPull();
 
 // ---------- Export ----------
-const exportCanvas = document.createElement("canvas");
+let exportCanvas = document.createElement("canvas");
 function renderFull(img, scale, text) {
+    exportCanvas = document.createElement("canvas"); // fresh canvas — a reused one can get stuck in a lost/blank state
     const w = Math.round(img.width * scale), h = Math.round(img.height * scale);
     exportCanvas.width = w;
     exportCanvas.height = h;
@@ -896,23 +897,39 @@ async function insertExif(blob, exif, dims) {
         return blob;
     }
 }
+async function isValidJpeg(blob, dims) {
+    if (!blob || blob.size < 20000) return false; // a real drone photo is never this small
+    try {
+        const bmp = await createImageBitmap(blob);
+        const ok = bmp.width === dims.w && bmp.height === dims.h;
+        bmp.close();
+        return ok;
+    } catch { return false; }
+}
 async function exportOne(div) {
     const file = state.originalImages.get(div);
     const img = await loadFileImage(file);
+    if (!img.width || !img.height) throw new Error("Decode failed");
     const text = labelFor(div);
     const exif = await loadExif(file);
     const target = TARGET_BYTES - (exif ? EXIF_RESERVE : 0);
+    const safe = Math.min(1, Math.sqrt(SAFE_PIXELS / (img.width * img.height)));
+    const scales = [...new Set([1, safe, Math.min(safe, Math.sqrt(8e6 / (img.width * img.height)))])];
     let scale = 1, dims = null, blob = null;
-    try { dims = renderFull(img, 1, text); blob = await encodeWithTarget(exportCanvas, target); } catch { blob = null; }
-    if (!blob) { // browser canvas limit hit — retry at safe size
-        scale = Math.min(1, Math.sqrt(SAFE_PIXELS / (img.width * img.height)));
-        dims = renderFull(img, scale, text);
-        blob = await encodeWithTarget(exportCanvas, target);
+    for (scale of scales) { // retry smaller when the browser gives back a broken/blank file
+        try { dims = renderFull(img, scale, text); blob = await encodeWithTarget(exportCanvas, target); }
+        catch { blob = null; }
+        if (await isValidJpeg(blob, dims)) break;
+        blob = null;
+        await new Promise(r => setTimeout(r, 200)); // let the browser free memory
     }
     exportCanvas.width = exportCanvas.height = 1; // free memory
     img.src = "";
     if (!blob) throw new Error("Encode failed");
-    if (exif) blob = await insertExif(blob, exif, dims);
+    if (exif) {
+        const withExif = await insertExif(blob, exif, dims);
+        if (withExif !== blob && await isValidJpeg(withExif, dims)) blob = withExif;
+    }
     return { blob, downscaled: scale < 1 };
 }
 async function saveZip(zip, fname) {
