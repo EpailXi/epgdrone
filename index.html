@@ -878,10 +878,16 @@ async function insertExif(blob, exif, dims) {
         }
         exif.thumbnail = null;
         exif["1st"] = {};
-        let bytes;
-        try { bytes = piexif.dump(exif); }
-        catch { if (exif.Exif) delete exif.Exif[piexif.ExifIFD.MakerNote]; bytes = piexif.dump(exif); }
+        const MAX_APP1 = 65000; // JPEG APP1 segment limit is 65533 bytes
+        const dump = () => { try { return piexif.dump(exif); } catch { return null; } };
+        let bytes = dump();
+        if (!bytes || bytes.length > MAX_APP1) { // DJI MakerNote often too big — drop it
+            if (exif.Exif) { delete exif.Exif[piexif.ExifIFD.MakerNote]; delete exif.Exif[piexif.ExifIFD.UserComment]; }
+            bytes = dump();
+        }
+        if (!bytes || bytes.length > MAX_APP1) throw new Error("EXIF too large");
         const out = piexif.insert(bytes, await blobToBinary(blob));
+        if (out.charCodeAt(0) !== 0xFF || out.charCodeAt(1) !== 0xD8) throw new Error("Bad JPEG after EXIF");
         const arr = new Uint8Array(out.length);
         for (let i = 0; i < out.length; i++) arr[i] = out.charCodeAt(i);
         return new Blob([arr], { type: "image/jpeg" });
