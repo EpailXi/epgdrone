@@ -182,7 +182,7 @@ canvas { max-width: 100%; height: auto; border-radius: 4px; box-shadow: 0 0 5px 
 const MAX_PREVIEW = 1000;        // preview canvas longest side (px)
 const TARGET_BYTES = 9900000;    // 9.9 MB per exported JPEG
 const EXIF_RESERVE = 65536;      // max EXIF segment size
-const PART_LIMIT = 1.5e9;        // split ZIP above ~1.5 GB
+const PART_LIMIT = 5e8;          // split ZIP above ~500 MB (whole part is held in RAM)
 const SAFE_PIXELS = 16000000;    // fallback size when browser canvas limit is hit
 
 const state = {
@@ -385,7 +385,8 @@ function createBatch(name) {
         nameInput._t = setTimeout(() => batch.querySelectorAll(".image-card").forEach(processImage), 300);
     };
     batch.querySelector("button").onclick = () => {
-        batch.querySelectorAll(".image-card").forEach(d => state.originalImages.delete(d));
+        if (exporting) return alert("Please wait — export in progress.");
+        batch.querySelectorAll(".image-card").forEach(freeCard);
         batch.remove();
         renumberBatches();
         updateSelBar();
@@ -416,7 +417,20 @@ function renumberBatches() {
         b.querySelector(".batch-title").textContent = `Batch ${i + 1} (${b.querySelectorAll(".image-card").length})`;
     });
 }
-function clearAll() { dom.container.innerHTML = ""; state.originalImages.clear(); updateSelBar(); }
+let exporting = false;
+function freeCard(d) { // release preview canvas memory (iOS caps total canvas memory)
+    state.originalImages.delete(d);
+    d.querySelectorAll("canvas").forEach(c => { c.width = c.height = 0; });
+    if (d._base) { d._base.width = d._base.height = 0; d._base = null; }
+}
+function clearAll() {
+    if (exporting) return alert("Please wait — export in progress.");
+    dom.container.querySelectorAll(".image-card").forEach(freeCard);
+    dom.container.innerHTML = ""; state.originalImages.clear(); updateSelBar();
+}
+// Dropping a file outside the drop zone would open it and lose all loaded work
+window.addEventListener("dragover", e => e.preventDefault());
+window.addEventListener("drop", e => e.preventDefault());
 
 // ---------- Manual selection (click = toggle, Shift+click = range) ----------
 const selBar = document.getElementById('selBar');
@@ -824,35 +838,50 @@ aiRender();
 aiPull();
 
 // ---------- Export ----------
-let exportCanvas = document.createElement("canvas");
 function renderFull(img, scale, text) {
-    exportCanvas = document.createElement("canvas"); // fresh canvas — a reused one can get stuck in a lost/blank state
+    const canvas = document.createElement("canvas"); // fresh canvas per attempt — a reused one can get stuck blank
     const w = Math.round(img.width * scale), h = Math.round(img.height * scale);
-    exportCanvas.width = w;
-    exportCanvas.height = h;
-    const ctx = exportCanvas.getContext("2d");
-    if (!ctx) throw new Error("Canvas too large");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) { canvas.width = canvas.height = 0; throw new Error("Canvas too large"); }
     ctx.drawImage(img, 0, 0, w, h);
     drawOverlay(ctx, w, h, text);
-    return { w, h };
+    return { canvas, w, h };
 }
 function toBlobAsync(canvas, quality) {
     return new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", quality));
 }
+// Returns a blob <= target, or null (caller then tries a smaller scale)
 async function encodeWithTarget(canvas, target) {
-    const first = await toBlobAsync(canvas, 1.0);
-    if (!first) return null;
-    if (first.size <= target) return first;
-    let lo = 0.4, hi = 1.0, best = null;
-    for (let i = 0; i < 6; i++) {
+    const first = await toBlobAsync(canvas, 0.92); // visually lossless, far fewer bytes than 1.0
+    if (!first || first.size <= target) return first;
+    let lo = 0.4, hi = 0.92, best = null;
+    for (let i = 0; i < 5; i++) {
         const mid = (lo + hi) / 2;
         const b = await toBlobAsync(canvas, mid);
         if (!b) return null;
         if (b.size <= target) { best = b; lo = mid; } else { hi = mid; }
     }
-    return best || await toBlobAsync(canvas, 0.4);
+    if (best) return best;
+    const last = await toBlobAsync(canvas, 0.4);
+    return last && last.size <= target ? last : null;
 }
-
+// Blank/black output from a lost canvas still encodes to a few hundred KB, so check real pixels
+function isBlankBitmap(src) {
+    const c = document.createElement("canvas");
+    c.width = c.height = 48;
+    const ctx = c.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(src, 0, 0, 48, 48);
+    const d = ctx.getImageData(0, 0, 48, 48).data;
+    let min = 255, max = 0;
+    for (let i = 0; i < d.length; i += 4) {
+        const v = (d[i] + d[i + 1] + d[i + 2]) / 3;
+        if (v < min) min = v;
+        if (v > max) max = v;
+    }
+    return max - min < 6;
+}
 function blobToBinary(blob) {
     return new Promise((res, rej) => {
         const r = new FileReader();
@@ -891,7 +920,9 @@ async function insertExif(blob, exif, dims) {
         if (out.charCodeAt(0) !== 0xFF || out.charCodeAt(1) !== 0xD8) throw new Error("Bad JPEG after EXIF");
         const arr = new Uint8Array(out.length);
         for (let i = 0; i < out.length; i++) arr[i] = out.charCodeAt(i);
-        return new Blob([arr], { type: "image/jpeg" });
+        const res = new Blob([arr], { type: "image/jpeg" });
+        if (res.size > TARGET_BYTES) throw new Error("Too big with EXIF");
+        return res;
     } catch (e) {
         console.warn("EXIF skipped:", e);
         return blob;
@@ -901,31 +932,34 @@ async function isValidJpeg(blob, dims) {
     if (!blob || blob.size < 20000) return false; // a real drone photo is never this small
     try {
         const bmp = await createImageBitmap(blob);
-        const ok = bmp.width === dims.w && bmp.height === dims.h;
+        const ok = bmp.width === dims.w && bmp.height === dims.h && !isBlankBitmap(bmp);
         bmp.close();
         return ok;
     } catch { return false; }
 }
-async function exportOne(div) {
-    const file = state.originalImages.get(div);
+async function exportOne(file, text) {
     const img = await loadFileImage(file);
-    if (!img.width || !img.height) throw new Error("Decode failed");
-    const text = labelFor(div);
+    if (!img.width || !img.height) throw new Error("cannot decode photo");
     const exif = await loadExif(file);
     const target = TARGET_BYTES - (exif ? EXIF_RESERVE : 0);
-    const safe = Math.min(1, Math.sqrt(SAFE_PIXELS / (img.width * img.height)));
-    const scales = [...new Set([1, safe, Math.min(safe, Math.sqrt(8e6 / (img.width * img.height)))])];
+    const px = img.width * img.height;
+    const safe = Math.min(1, Math.sqrt(SAFE_PIXELS / px));
+    const scales = [...new Set([1, safe, Math.min(safe, Math.sqrt(8e6 / px))])];
     let scale = 1, dims = null, blob = null;
-    for (scale of scales) { // retry smaller when the browser gives back a broken/blank file
-        try { dims = renderFull(img, scale, text); blob = await encodeWithTarget(exportCanvas, target); }
-        catch { blob = null; }
+    for (scale of scales) { // retry smaller when the browser gives back a broken/blank/too-big file
+        let r = null;
+        try {
+            r = renderFull(img, scale, text);
+            dims = { w: r.w, h: r.h };
+            blob = isBlankBitmap(r.canvas) ? null : await encodeWithTarget(r.canvas, target);
+        } catch { blob = null; }
+        if (r) r.canvas.width = r.canvas.height = 0; // free memory before next attempt
         if (await isValidJpeg(blob, dims)) break;
         blob = null;
         await new Promise(r => setTimeout(r, 200)); // let the browser free memory
     }
-    exportCanvas.width = exportCanvas.height = 1; // free memory
     img.src = "";
-    if (!blob) throw new Error("Encode failed");
+    if (!blob) throw new Error("browser could not render it (low memory?)");
     if (exif) {
         const withExif = await insertExif(blob, exif, dims);
         if (withExif !== blob && await isValidJpeg(withExif, dims)) blob = withExif;
@@ -941,9 +975,12 @@ async function downloadImages(mode) {
     const cards = [...dom.container.querySelectorAll(".image-card")].filter(d => state.originalImages.has(d));
     if (!cards.length) return alert("No images uploaded!");
     const byFolder = mode === "folders";
+    if (exporting) return;
     const btn = feishu ? dom.feishuPostBtn : byFolder ? dom.downloadFoldersBtn : dom.downloadBtn, btnLabel = btn.textContent;
+    const allBtns = [dom.feishuPostBtn, dom.downloadFoldersBtn, dom.downloadBtn];
     const project = dom.projectPicker.value, useZip = !feishu;
-    btn.disabled = true;
+    exporting = true;
+    allBtns.forEach(b => { b.disabled = true; });
     btn.textContent = "Processing...";
     const failed = [], notes0 = [], done = [];
     let downscaled = 0;
@@ -957,8 +994,9 @@ async function downloadImages(mode) {
         for (let i = 0; i < cards.length; i++) {
             const card = cards[i];
             let res;
-            try { res = await exportOne(card); }
-            catch { failed.push(state.originalImages.get(card).name); continue; }
+            const file = state.originalImages.get(card);
+            try { res = await exportOne(file, labelFor(card)); }
+            catch (e) { failed.push(`${file.name} (${e.message})`); continue; }
             if (res.downscaled) downscaled++;
             const raw = safeName(getName(card));
             const key = raw.toLowerCase();          // case-insensitive (Windows-safe)
@@ -985,6 +1023,7 @@ async function downloadImages(mode) {
             dom.progressBar.style.width = `${((i + 1) / cards.length) * 90}%`;
             await new Promise(r => setTimeout(r, 0));
         }
+        if (useZip && partBytes) btn.textContent = "Zipping...";
         if (useZip && partBytes) await saveZip(zip, part === 1 ? `${zipBase}.zip` : `${zipBase}_part${part}.zip`);
         if (feishu) notes0.push(`Sent ${sent}/${cards.length} photo(s) to "${FEISHU.GROUPS[project]}".`);
         dom.progressBar.style.width = "100%";
@@ -996,7 +1035,8 @@ async function downloadImages(mode) {
     } catch (e) {
         alert(`Error: ${e.message}`);
     } finally {
-        btn.disabled = false;
+        exporting = false;
+        allBtns.forEach(b => { b.disabled = false; });
         btn.textContent = btnLabel;
         setTimeout(() => { dom.progressBar.style.width = "0%"; }, 2000);
     }
