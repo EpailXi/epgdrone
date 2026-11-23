@@ -7,7 +7,7 @@
 4. Add features: **Bot** + **Web app** (homepage `https://epailxi.github.io/epgdrone/`).
 5. Tenant scopes: `im:message:send_as_bot`, `im:chat:readonly`, `im:resource` (upload photos as image messages).
 6. Publish a version; admin approves.
-7. Add the bot to both groups (group → Settings → Bots → Add Bot → EPG Drone Photo Poster).
+7. Add the bot to both groups (group → Settings → Bots → Add Bot → Wong Siang Xi's Feishu CLI).
 
 ## 2. Cloudflare Worker
 1. dash.cloudflare.com → Workers → Create → name `epg-feishu` → paste `2026-10-15-feishu-worker.js` → Deploy.
@@ -16,6 +16,7 @@
    - `APP_SECRET` = App Secret (**Secret** type)
    - `REDIRECT_URI` = `https://epailxi.github.io/epgdrone/`
    - `ALLOWED_ORIGIN` = `https://epailxi.github.io`
+   - `ALLOWED_USERS` = your open_id (login on the site, then open `<Worker URL>/whoami` via the page console: `api("/whoami")`). Only these users can post/train.
 3. (Optional, shared AI training) Workers → KV → Create namespace `epg-drone-ai` → Worker Settings → Bindings → KV namespace, variable name `TRAIN`. Without it the AI learns per device only.
 
 ## 3. index.html

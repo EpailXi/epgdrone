@@ -252,7 +252,7 @@ async function api(path, opts = {}) {
     const headers = { Authorization: `Bearer ${await accessToken()}` };
     if (opts.json) { headers["Content-Type"] = "application/json; charset=utf-8"; opts.body = JSON.stringify(opts.json); }
     const r = await (await fetch(FEISHU.WORKER + path, { method: opts.method || (opts.body ? "POST" : "GET"), headers, body: opts.body })).json();
-    if (r.code !== 0) throw new Error(`Feishu ${path.split("?")[0]}: ${r.msg} (${r.code})`);
+    if (r.code !== 0) throw Object.assign(new Error(`Feishu ${path.split("?")[0]}: ${r.msg} (${r.code})`), { code: r.code });
     return r.data;
 }
 // Bot sends one photo (original JPEG, <=10 MB) as an image message to the project group
@@ -263,7 +263,7 @@ async function postImageToGroup(project, blob, name) {
     for (let attempt = 0; ; attempt++) {
         try { return await api("/bot/image", { body: fd }); }
         catch (e) {
-            if (attempt >= 2) throw e;
+            if (attempt >= 2 || [400, 401, 403, 404].includes(e.code)) throw e; // permanent — don't retry
             await new Promise(r => setTimeout(r, 1500 * (attempt + 1))); // rate limit / transient
         }
     }
@@ -1008,7 +1008,10 @@ async function downloadImages(mode) {
                 // Original photos, one by one — no ZIP
                 btn.textContent = `Sending ${i + 1}/${cards.length}...`;
                 try { await postImageToGroup(project, res.blob, fileName); sent++; done.push(card); }
-                catch (e) { failed.push(`${state.originalImages.get(card).name} (${e.message})`); }
+                catch (e) {
+                    failed.push(`${state.originalImages.get(card).name} (${e.message})`);
+                    if ([401, 403, 404].includes(e.code)) { notes0.push("Stopped: Feishu refused the post."); break; }
+                }
                 await new Promise(r => setTimeout(r, 400));
             } else {
                 if (partBytes && partBytes + res.blob.size > PART_LIMIT) {
