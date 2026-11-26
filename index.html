@@ -133,7 +133,7 @@ canvas { max-width: 100%; height: auto; border-radius: 4px; box-shadow: 0 0 5px 
     <button class="secondary" onclick="document.getElementById('folderUpload').click()">Upload Folder</button>
     <input type="file" id="folderUpload" webkitdirectory multiple class="hidden">
     <button class="secondary" onclick="clearAll()">Clear All</button>
-    <button id="downloadBtn" onclick="downloadImages()">Download All (ZIP)</button>
+    <button id="downloadBtn" onclick="downloadImages('both')">Download (ZIP)</button>
     <button id="downloadFoldersBtn" onclick="downloadImages('folders')">Download by Folder (ZIP)</button>
 </div>
 <div class="control-group">
@@ -974,7 +974,7 @@ async function downloadImages(mode) {
     if (feishu) { try { await accessToken(); } catch (e) { return alert(e.message); } }
     const cards = [...dom.container.querySelectorAll(".image-card")].filter(d => state.originalImages.has(d));
     if (!cards.length) return alert("No images uploaded!");
-    const byFolder = mode === "folders";
+    const byFolder = mode === "folders", both = mode === "both";
     if (exporting) return;
     const btn = feishu ? dom.feishuPostBtn : byFolder ? dom.downloadFoldersBtn : dom.downloadBtn, btnLabel = btn.textContent;
     const allBtns = [dom.feishuPostBtn, dom.downloadFoldersBtn, dom.downloadBtn];
@@ -1014,14 +1014,19 @@ async function downloadImages(mode) {
                 }
                 await new Promise(r => setTimeout(r, 400));
             } else {
-                if (partBytes && partBytes + res.blob.size > PART_LIMIT) {
+                const add = both ? res.blob.size * 2 : res.blob.size;
+                if (partBytes && partBytes + add > PART_LIMIT) {
                     await saveZip(zip, `${zipBase}_part${part}.zip`);
                     zip = new JSZip(); partBytes = 0; part++;
                 }
                 // "Download by Folder": one sub-folder per photo name; "Download All": flat
-                zip.file(byFolder ? `${name}/${fileName}` : fileName, res.blob);
+                // "Download": one ZIP with both layouts — all photos flat + one sub-folder per name
+                if (both) {
+                    zip.file(`All Photos 全部照片/${fileName}`, res.blob);
+                    zip.file(`By Folder 按名称/${name}/${fileName}`, res.blob);
+                } else zip.file(byFolder ? `${name}/${fileName}` : fileName, res.blob);
                 done.push(card);
-                partBytes += res.blob.size;
+                partBytes += add;
             }
             dom.progressBar.style.width = `${((i + 1) / cards.length) * 90}%`;
             await new Promise(r => setTimeout(r, 0));
